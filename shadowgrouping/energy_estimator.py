@@ -25,12 +25,14 @@ class StateSampler():
         
         Input:
         - state, numpy array of size 2**N with N = num_qubits. Coefficients are to be specified in the computational basis.
+        - density_matrix, bool (defaults to False). Whether <state> has to be provided as density matrix (2^N,2^N)
+        or state vector (2^N,)
     """
-    def __init__(self,state):
+    def __init__(self,state,density_matrix=False):
         self.state = np.array(state)
         self.num_qubits = int(np.round(np.log2(len(state)),0))
         assert len(self.state) == 2**self.num_qubits, "State size has to be of size 2**N for some integer N."
-        self.circuit = models.Circuit(self.num_qubits)
+        self.circuit = models.Circuit(self.num_qubits,density_matrix=density_matrix)
         self.X = [gates.H,gates.I] # use Hadamard gate to switch to +/- basis
         S_dagger = lambda i: gates.U1(i,-np.pi/2)
         self.Y = [S_dagger,gates.H] # use Hadamard + phase gate to switch to +/-i basis
