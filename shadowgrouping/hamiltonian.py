@@ -1,4 +1,3 @@
-from qiskit_nature.drivers import Molecule
 from qiskit_nature.drivers.second_quantization import ElectronicStructureDriverType, ElectronicStructureMoleculeDriver
 from qiskit_nature.problems.second_quantization import ElectronicStructureProblem
 from qiskit_nature.converters.second_quantization import QubitConverter
@@ -169,6 +168,91 @@ def load_pauli_list(folder_hamiltonian,molecule_name,basis_name,encoding,verbose
     observables = np.array([[char_to_int[c] for c in o] for o in obs],dtype=int)
     
     return observables, w, offset, E_numerics, state
+
+def load_thermal_state(beta,folder_hamiltonian,molecule_name,basis_name,encoding,verbose=False):
+    """ Calculates the thermal state at a given inverse temperature <beta> for the electronic structure problem.
+        Loads the Pauli operators from the files of https://github.com/charleshadfield/adaptiveshadows
+        Requires the name of the folder where all the Hamiltonians are stored together with the selection of the
+        molecule, basis set and encoding. If verbose is set to True, some elements of the Pauli list are printed to console.
+        If diagonalize is set to False, only returns the Pauli decomposition from file and sets all other return values to None.
+        
+        Returns the observables, their respective weight, the offset energy and the thermal energy with its corresponding density matrix.
+    """
+    # match basis set naming scheme to saved files
+    basis_matcher = {"sto3g": "STO3g", "6-31g": "6-31G"}
+    basis_name = basis_matcher[basis_name]
+    
+    len_name = len(molecule_name) + len(basis_name) + 1 # for underscore char in naming scheme
+    
+    # open folder where the Hamiltonians of various encodings are stored
+    available_folders = os.listdir(folder_hamiltonian)
+    folder_name = None
+    for folder in available_folders:
+        if folder[:len_name] == molecule_name + "_" + basis_name:
+            folder_name = folder
+    assert folder_name is not None, "File not found for molecule {} and basis set {}".format(molecule_name,basis_name)
+    
+    # open file where the Hamiltonian of the specified encoding is stored
+    available_files = os.listdir(folder_hamiltonian + folder_name)
+    file_name = None
+    for file in available_files:
+        if file[:2] == encoding[:2].lower() and file.find("grouped") == -1:
+            file_name = file
+    assert file_name   is not None, "File not found for encoding {}".format(encoding)
+    
+    # extract Pauli list from file
+    full_file_name = os.path.join(folder_hamiltonian,folder_name,file_name)
+    data = np.loadtxt(full_file_name,dtype=object)
+    paulis, weights = data[::2].astype(str), data[1::2].astype(complex).real
+    
+    # use Pauli list to create Hamiltonian and diagonalize it afterwards to eigenstates and energies
+    # we can set the offset to zero for this because it does not affect the thermal state at all
+    inds = paulis != "I"*len(paulis[0])
+    H = Hamiltonian(weights[inds],paulis[inds])
+    mat = H.SummedOp().to_matrix()
+    vals, states =  np.linalg.eigh(mat)
+    states = states.real # the eigenstates are real-valued because the Hamiltonian is as well
+    beta *= -1
+    probs = np.exp(beta*vals - beta*vals[0])
+    # adding a constant to all exponents does not alter the probabilities
+    # because the argument is negative, we substract the smallest value to make the calculation more stable
+    probs /= np.sum(probs)
+    E_numerics = np.sum(probs*vals)
+    rho = np.einsum("i,ji,ki",probs,states,states)
+    assert abs(E_numerics - np.trace(mat@rho)) < 1e-3, "wrong einstein-summation"
+    
+    # Pauli item "III...II" in list should correspond to energy offset
+    ind = -1
+    identity = "I"*len(paulis[0])
+    for i,p in enumerate(paulis):
+        if p == identity:
+            ind = i
+            break
+    if ind == -1:
+        offset = 0
+        obs = paulis
+        w = weights
+    else:
+        offset = weights[ind]
+        # erase the corresponding entry in paulis and weights
+        obs = np.delete(paulis,ind)
+        w = np.delete(weights,ind)
+        assert len(obs) == len(paulis) - 1, "Error in line eraser."
+        assert len(obs) == len(w), "Both arrays are not of equal length anymore."
+    
+    # print some to console
+    if verbose:
+        print("Offset","\t\t",offset)
+        for i, (p, we) in enumerate(zip(obs, w)):
+            print(p,"\t",we)
+            if i == 9:
+                print("\t","...")
+                break
+    
+    # convert string characters to integers
+    observables = np.array([[char_to_int[c] for c in o] for o in obs],dtype=int)
+    
+    return observables, w, offset, E_numerics, rho
 
 def get_pauli_list(molecule,
                    mapping=JordanWignerMapper,
