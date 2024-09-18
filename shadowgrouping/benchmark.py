@@ -1,169 +1,183 @@
-from shadowgrouping.energy_estimator import Energy_estimator, StateSampler
-from shadowgrouping.measurement_schemes import N_delta
+from shadowgrouping.measurement_schemes import N_delta, hit_by, char_to_int
 import numpy as np
 from copy import deepcopy
+import json
 
-def benchmark_empirical(method,offset,state,E_GS,benchmark_params={"Nshots":1000, "Nreps": 100, "truncate_delta": None}):
-    """ Benchmark 1 of the manuscript. Uses the method to allocate <Nshots> many measurement settings to measure from <state>.
-        Afterwards, the energy estimate E' is reconstructed and benchmarked against <E_GS> via RMSE.
-        This is averaged over <Nreps> independent measurement runs.
-        If truncate_delta is set to a value above zero, truncates the observable list after first allocation and allocates again.
-        Returns RMSE and its std deviation as well as the individual estimates.
-    """
-    assert isinstance(state,StateSampler), "State-instance has to be wrapped in StateSampler class."
+class NumpyEncoder(json.JSONEncoder):
+    """ Custom encoder for numpy data types """
+    def default(self, obj):
+        if isinstance(obj, (np.int_, np.intc, np.intp, np.int8,
+                            np.int16, np.int32, np.int64, np.uint8,
+                            np.uint16, np.uint32, np.uint64)):
+            return int(obj)
+
+        elif isinstance(obj, (np.float_, np.float16, np.float32, np.float64)):
+            return float(obj)
+
+        elif isinstance(obj, (np.complex_, np.complex64, np.complex128)):
+            return {'real': obj.real, 'imag': obj.imag}
+
+        elif isinstance(obj, (np.ndarray,)):
+            return obj.tolist()
+
+        elif isinstance(obj, (np.bool_)):
+            return bool(obj)
+
+        elif isinstance(obj, (np.void)): 
+            return None
+
+        return json.JSONEncoder.default(self, obj)
+
+def save_to_json(diction,filename):
+        with open(filename+".json", 'w') as f: 
+            json.dump(diction, f, cls=NumpyEncoder)
+        return
+    
+def load_settings(filename,estimator,N=None):
+    estimator.reset()
+    with open(filename, 'r') as f:
+        data = json.load(f)
+    if N is None:
+        N = np.max(np.array(list(data.keys()),dtype=int))
+        data = data[str(N)]
+    else:
+        temp = data.get(str(N),None)
+        if temp is None:
+            print("Warning! N={} not available as key in {}. Aborted.".format(N,data.keys()))
+            return estimator
+        data = temp
+    estimator.num_settings = N
+    estimator.settings_dict = data
+    estimator.settings_buffer = estimator.settings_dict.copy()
+    assert len(list(data.keys())[0]) == estimator.measurement_scheme.num_qubits, "Loaded settings correspond to a different qubit number."
+    for setting,reps in data.items():
+        setting = [char_to_int[c] for c in setting]
+        is_hit = [hit_by(o,setting) for o in estimator.measurement_scheme.obs]
+        estimator.measurement_scheme.N_hits[is_hit] += reps
+    return estimator
+
+def track_method_epsilon(estimator,E_GS,delta,benchmark_params={"Nshots":1000, "Nreps": 100, "Nsteps": 10, "truncate": False, "Nstart": None, "settings_filename": None,"load_at": None,"save_outcomes": False}):
     assert isinstance(benchmark_params,dict) or benchmark_params is None, "benchmark_params have to be either None or a dictionary."
     if benchmark_params is None:
         benchmark_params = {}
     # preprocessing of benchmark params
-    Nshots         = benchmark_params.get("Nshots",1000)
-    Nreps          = benchmark_params.get("Nreps",100)
-    truncate_delta = benchmark_params.get("truncate_delta", None)
-    use_naive      = benchmark_params.get("use_naive", False)
-    if truncate_delta is not None:
-        assert truncate_delta > 0, "Delta value for truncation value has to be positive, but was {}.".format(truncate_delta)
+    save_outcomes = benchmark_params.get("save_outcomes",False)
+    Nshots        = max(1,benchmark_params.get("Nshots",10000))
+    Nreps         = max(1,benchmark_params.get("Nreps",100))
+    Nsteps        = max(2,benchmark_params.get("Nsteps",40))
+    Nstart        = max(N_delta(delta),benchmark_params.get("Nstart",10))
+    filename      = benchmark_params.get("settings_filename",None)
+    assert isinstance(filename,str) or filename is None, "settings_filename has to be either None or str."
+    load_at_N     = benchmark_params.get("load_at", None) if filename is not None else None
+    if load_at_N is not None:
+        assert load_at_N < Nstart, "Loading point has been set equal to or after starting point of tracking."
+    save_dicts    = filename is not None
+    truncate      = benchmark_params.get("truncate", False)
+    use_naive     = benchmark_params.get("use_naive", False)
+    N_steps       = np.unique(np.round(np.logspace(np.log10(Nstart),np.log10(Nshots),Nsteps),0)).astype(int)
     
-    # generate settings
-    if method.is_sampling:
-        estimates = []
-        for r in range(Nreps):
-            estimator = Energy_estimator(method,state,offset)
+    N_current = 0
+    eps_provable = np.zeros(len(N_steps))
+    eps_empirical = np.zeros_like(eps_provable)
+    eps_std = np.zeros_like(eps_empirical)
+    
+    energies = np.zeros((Nreps,len(N_steps)))
+    saved_settings = {}
+    if estimator.measurement_scheme.is_sampling:
+        # allocate and measure in one go, then repeat this process
+        for j in range(Nreps):
             estimator.reset()
-            # if estimator.method is adaptive, then take outcomes into account
+            N_current = 0
             if estimator.is_adaptive:
-                last_threshold = 0
-                for threshold in np.append(estimator.update_steps,Nshots):
-                    # sample settings until the next threshold value is reached or the measurement budget is full
-                    # method itself takes care of taking the outcomes into account
-                    Nshots_batch = threshold - last_threshold
+                threshold_ind = 0
+            for i,Nval in enumerate(N_steps):
+                # if estimator.method is adaptive, then take outcomes into account
+                if estimator.is_adaptive:
+                    while Nval > np.append(estimator.update_steps,Nshots)[threshold_ind]:
+                        # sample settings until all applicable threshold values have been reached or the measurement budget is full anyways
+                        # method itself takes care of taking the outcomes into account
+                        Nshots_batch = estimator.update_steps[threshold_ind] - N_current
+                        estimator.propose_next_settings(Nshots_batch)
+                        estimator.measure() # outcome parsing to method is performed internally here
+                        N_current += Nshots_batch
+                        threshold_ind += 1
+                        assert N_current in estimator.update_steps
+                if Nval > N_current:
+                    Nshots_batch = Nval - N_current
                     estimator.propose_next_settings(Nshots_batch)
-                    estimator.measure() # outcome parsing to method is performed internally here
-                    last_threshold = threshold
-            else:
-                estimator.propose_next_settings(Nshots)
+                    estimator.measure()
+                    N_current += Nshots_batch
+                    assert N_current in N_steps
+                if use_naive:
+                    temp = deepcopy(estimator.measurement_scheme)
+                    temp.update_variance_estimate(Nval != N_steps[i]) # update covariance matrix only if no further settings have to be alloted
+                    energy = temp.get_energy()
+                else:
+                    energy = estimator.get_energy()
+                energies[j,i] = energy
+                eps_provable[i] += sum(estimator.measurement_scheme.get_epsilon_sys_stat(delta))
+                if save_dicts and j==0:
+                    saved_settings[str(Nval)] = estimator.settings_dict
+                    save_to_json(saved_settings,filename)
+        temp = abs(energies - E_GS)
+        eps_empirical = np.mean(temp,axis=0)
+        eps_std = np.std(temp,axis=0)
+        assert len(eps_empirical) == len(eps_provable) and len(eps_empirical) == len(eps_std), "Lengths of arrays have changed during is_adaptive-part."
+        eps_provable /= Nreps
+    else:
+        # find measurement settings once and sample based on these
+        estimator.reset()
+        if load_at_N is not None:
+            estimator = load_settings(filename,estimator,N=load_at_N)
+            assert estimator.num_settings == load_at_N, "Loading settings from file did not work."
+            N_current = load_at_N
+            filename += "_long"
+        if save_outcomes:
+            outcome_dict = {str(N): {} for N in N_steps}
+            estimator.toggle_outcome_tracking()
+        for i,Nval in enumerate(N_steps):
+            estimator.propose_next_settings(Nval-N_current)
+            for j in range(Nreps):
+                estimator.clear_outcomes()
                 estimator.measure()
-            if use_naive:
-                estimator.measurement_scheme.update_variance_estimate()
-                energy = estimator.measurement_scheme.get_energy()
-            else:
-                energy = estimator.get_energy()[0]
-            estimates.append(energy)
-        estimates = np.array(estimates)
-    else:
-        # next settings have to be allocated only once
-        if truncate_delta is not None:
-            for _ in range(Nshots):
-                method.find_setting()
-            method.truncate(truncate_delta)
-            method.reset()
-        estimator = Energy_estimator(method,state,offset,repeats=Nreps)
-        estimator.propose_next_settings(Nshots)
-        estimator.measure()
-        estimates = estimator.get_energy()
-        
-    # get statistics
-    diffs = (estimates - E_GS)**2
-    RMSE  = np.sqrt(np.mean(diffs))
-    STD   = np.sqrt(np.std(diffs)/Nreps)
-    
-    return RMSE, STD, estimates
-
-def benchmark_provable(method,delta,benchmark_params={"Nshots":1000, "Nreps": 100, "Nsteps": 10, "truncate": False}):
-    """ Benchmark 2 of the manuscript. Uses the method to allocate <Nshots> many measurement settings.
-        Afterwards, the provable error epsilon is reconstructed between N_delta(<delta>) and <Nshots>, with <Nsteps>+2 log-steps.
-        This is averaged over <Nreps> independent measurement runs in case the method samples the settings.
-        Returns epsilon and (epsilon,epsilon_truncated) in case the method is also to be truncated.
-    """
-    assert isinstance(benchmark_params,dict) or benchmark_params is None, "benchmark_params have to be either None or a dictionary."
-    if benchmark_params is None:
-        benchmark_params = {}
-    # preprocessing of benchmark params
-    Nshots   = benchmark_params.get("Nshots",1000)
-    Nreps    = benchmark_params.get("Nreps",100)
-    Nsteps   = benchmark_params.get("Nsteps",10)
-    truncate = benchmark_params.get("truncate", False)
-    Nvals    = np.unique(np.round(np.logspace(np.log10(N_delta(delta)),np.log10(Nshots),Nsteps+2),0)).astype(int)
-    
-    # generate settings
-    epsilon = np.zeros(len(Nvals),dtype=float)
-    if method.is_sampling:
-        for _ in range(Nreps):
-            method.reset()
-            Nnext = 0
-            for i,Nval in enumerate(Nvals):
-                for _ in range(Nval-Nnext):
-                    method.find_setting()
-                epsilon[i] += sum(method.get_epsilon_sys_stat(delta))
-                Nnext = Nval
-        epsilon /= Nreps
-    else:
-        Nnext = 0
-        for i,Nval in enumerate(Nvals):
-            for _ in range(Nval-Nnext):
-                method.find_setting()
-            epsilon[i] = sum(method.get_epsilon_sys_stat(delta))
-            Nnext = Nval
+                outcome_dict[str(Nval)][j] = estimator.outcome_dict
+                energies[j,i] = estimator.get_energy()
+            temp = abs(energies[:,i] - E_GS)
+            eps_empirical[i] = np.mean(temp)
+            eps_std[i] = np.std(temp)
+            N_current = Nval
+            eps_provable[i] = sum(estimator.measurement_scheme.get_epsilon_sys_stat(delta))
+            if save_dicts:
+                saved_settings[str(Nval)] = estimator.settings_dict
+                save_to_json(saved_settings,filename)
+            if save_outcomes:
+                # append and delete outcome tag
+                filename += "_outcomes"
+                save_to_json(outcome_dict,filename)
+                filename = filename[:-9]
         if truncate:
-            # after first run through:
-            # truncate the observable list and reallocate everything again on the truncated list
-            epsilon_truncated = np.zeros_like(epsilon)
-            epsilon_syst = method.truncate(delta)
-            method.reset()
-            Nnext = 0
-            for i,Nval in enumerate(Nvals):
-                for _ in range(Nval-Nnext):
-                    method.find_setting()
-                epsilon_truncated[i] = sum(method.get_epsilon_sys_stat(delta)) + epsilon_syst
-                Nnext = Nval
-            return Nvals, epsilon, epsilon_truncated
-    return Nvals, epsilon
-
-def save_dict(filename,savedict,append=False):
-    mode = "a" if append else "w"
-    with open(filename, mode) as f:
-        if not append:
-            f.write("Method\tRMSE\tSTD\n")
-        for label,val in savedict.items():
-            line = label + "\t{}\t{}\n".format(val[0],val[1])
-            f.write(line)
-    return
-
-def save_dict_provable(filename,savedict,Nsteps,append=False):
-    mode = "a" if append else "w"
-    with open(filename, mode) as f:
-        if not append:
-            f.write("Method")
-            for N in Nsteps:
-                f.write("\t{}".format(N))
-            f.write("\n")
-        for label,vals in savedict.items():
-            f.write(label)
-            for val in vals:
-                f.write("\t{}".format(val))
-            f.write("\n")
-    return
-
-def load_dict(filename):
-    outdict = {}
-    with open(filename, "r") as f:
-        f.readline()
-        for line in f.readlines():
-            vals = line.strip().split()
-            key = vals[0]
-            if key in outdict.keys():
-                key += "+"
-            outdict[key] = (float(vals[1]),float(vals[2]))
-    return outdict
-
-def load_dict_provable(filename):
-    outdict = {}
-    with open(filename, "r") as f:
-        # first row contains the Nsteps values
-        Nsteps = np.array(f.readline().strip().split()[1:],dtype=int)
-        # other lines contain the corresponding values
-        for line in f.readlines():
-            vals = line.strip().split()
-            key = vals[0]
-            if key in outdict.keys():
-                key += "+"
-            outdict[key] = np.array(vals[1:],dtype=float)
-    return Nsteps, outdict
+            saved_settings_trunc = {}
+            N_current = 0
+            energies_truncated = np.zeros_like(energies)
+            eps_prov_truncated = np.zeros_like(eps_provable)
+            eps_emp_truncated  = np.zeros_like(eps_empirical)
+            eps_std_truncated  = np.zeros_like(eps_std)
+            eps_truncation = estimator.measurement_scheme.truncate(delta)
+            estimator.reset()
+            for i,Nval in enumerate(N_steps):
+                estimator.propose_next_settings(Nval-N_current)
+                for j in range(Nreps):
+                    estimator.clear_outcomes()
+                    estimator.measure()
+                    energies_truncated[j,i] = estimator.get_energy()
+                temp = abs(energies_truncated[:,i] - E_GS)
+                eps_emp_truncated[i] = np.mean(temp)
+                eps_std_truncated[i] = np.std(temp)
+                N_current = Nval
+                eps_prov_truncated[i] = sum(estimator.measurement_scheme.get_epsilon_sys_stat(delta)) + eps_truncation
+                if save_dicts:
+                    saved_settings_trunc[str(Nval)] = estimator.settings_dict
+                    save_to_json(saved_settings_trunc,filename+"_trunc")
+            
+            return N_steps, eps_provable, eps_empirical, eps_std, energies, eps_prov_truncated, eps_emp_truncated, eps_std_truncated, energies_truncated
+    return N_steps, eps_provable, eps_empirical, eps_std, energies
