@@ -1,23 +1,7 @@
 import numpy as np
 from qibo import models, gates
 from shadowgrouping.measurement_schemes import hit_by
-from shadowgrouping.hamiltonian import int_to_char
-
-##################### Helper functions ########################################################
-def save_energy_estimations(estimations,groundstate_energy,savefile=""):
-    savename = savefile + "_energy_estimations.txt"
-    np.savetxt(savename,estimations,header="Averaged over {} runs\nE_GS: {}".format(len(estimations),groundstate_energy))
-    return
-
-def load_energy_estimations(savefile=""):
-    estimations = np.loadtxt(savefile + "_energy_estimations.txt",skiprows=2)
-    with open(savefile + "_energy_estimations.txt","r") as f:
-        print(f.readline())
-        s = f.readline()
-    energy = float(s.strip().split()[-1])
-    return estimations, energy
-###############################################################################################
-
+from shadowgrouping.hamiltonian import int_to_char, char_to_int
 
 class StateSampler():
     """ Convenience class that holds a fixed state of length 2**num_qubits. The latter number is inferred automatically.
@@ -139,8 +123,8 @@ class Sign_estimator():
         return energy + self.offset
 
 class Energy_estimator():
-    """ Convenience class that holds both a measurement scheme and a VQA instance.
-        The main workflow consists of proposing the next (few) measurement settings and measuring them in the VQA.
+    """ Convenience class that holds both a measurement scheme and a StateSampler instance.
+        The main workflow consists of proposing the next (few) measurement settings and measuring them in the respective bases.
         Furthermore, it tracks all measurement settings and their respective outcomes (of value +/-1 per qubit).
         Based on these values, the current energy estimate can be calculated.
         
@@ -148,33 +132,70 @@ class Energy_estimator():
         - measurement_scheme, see class Measurement_Scheme and subclasses for information.
         - state, see class StateSampler.
         - Energy offset (defaults to 0) for the energy estimation.
-          This typically consists of the identity term in the corresponding Hamiltonian decomposition.
-        - repeats (int), counting how often the same measure()-step has to be repeated. Can be used to gather statistics for the same measurement proposal
+          This consists of the identity term in the corresponding Hamiltonian decomposition.
     """
-    def __init__(self,measurement_scheme,state,offset=0,repeats=1):
-        # TODO: shape checking for measurements in measurement_scheme and num_qubits in state
+    def __init__(self,measurement_scheme,state,offset=0,spin_corr=None):
         assert measurement_scheme.num_qubits == state.num_qubits, "Measurement and state scheme do not match in terms of qubit number."
         self.measurement_scheme = measurement_scheme
         self.state        = state
-        self.settings     = []
-        assert isinstance(repeats,int) and repeats >= 1, "Repeats should be an integer >= 1, but was {}.".format(repeats)
-        self.repeats      = repeats
-        self.outcomes     = {i: [] for i in range(self.repeats)}
         self.offset       = offset
         # convenience counters to keep track of measurements settings and respective outcomes
+        self.settings_dict = {}
+        self.settings_buffer = {}
+        self.running_avgs = np.zeros_like(self.measurement_scheme.w)
+        self.running_N    = np.zeros(len(self.running_avgs),dtype=int)
         self.num_settings = 0
         self.num_outcomes = 0
+        self.measurement_scheme.reset()
         self.is_adaptive  = measurement_scheme.is_adaptive
         if self.is_adaptive:
             self.update_steps = np.array(measurement_scheme.update_steps)
+            self.order = {}
             assert hasattr(measurement_scheme,"receive_outcome"), "The given method does not have the function receive_outcome()."
+        self.running_avgs = np.zeros_like(self.measurement_scheme.w)
+        self.running_N    = np.zeros(len(self.running_avgs),dtype=int)
         
     def reset(self):
-        self.settings = []
-        self.outcomes = {i: [] for i in range(self.repeats)}
-        # reset counters and measurement_scheme
+        self.running_avgs = np.zeros_like(self.measurement_scheme.w)
+        self.running_N    = np.zeros(len(self.running_avgs),dtype=int)
+        self.settings_dict = {}
+        self.settings_buffer = {}
         self.num_settings, self.num_outcomes = 0, 0
         self.measurement_scheme.reset()
+        if hasattr(self,"outcome_dict"):
+            self.outcome_dict = {}
+        return
+    
+    def clear_outcomes(self):
+        self.settings_buffer = self.settings_dict.copy()
+        self.running_avgs = np.zeros_like(self.measurement_scheme.w)
+        self.running_N    = np.zeros(len(self.running_avgs),dtype=int)
+        self.num_outcomes = 0
+        if self.S is not None:
+            self.running_Z_mean = 0.0
+            self.running_Z_samples = 0
+        if hasattr(self,"outcome_dict"):
+            self.outcome_dict = {}
+        return
+    
+    def __setting_to_str(self,p):
+        out = ""
+        for c in p:
+            out += int_to_char[c]
+        return out
+    
+    def __settings_to_dict(self,settings):
+        # run all the last prepared measurement settings
+        # from the settings list, fetch the unique settings and their respective counts
+        unique_settings, counts = np.unique(settings,axis=0,return_counts=True)
+        for setting,nshots in zip(unique_settings,counts):
+            paulistring = self.__setting_to_str(setting)
+            if self.is_adaptive:
+                self.order[paulistring] = np.arange(len(settings))[np.prod(np.equal(settings,setting),axis=-1).astype(bool)]
+            for diction in (self.settings_dict,self.settings_buffer):
+                val = diction.get(paulistring,0)
+                diction[paulistring] = nshots + val
+        return
         
     def propose_next_settings(self,num_steps=1):
         """ Find the <num_steps> next setting(s) via the provided measurement scheme. """
@@ -194,83 +215,46 @@ class Energy_estimator():
             p, _ = self.measurement_scheme.find_setting()
             settings.append(p)
         settings = np.array(settings)
-        self.settings = np.vstack((self.settings,settings)) if len(self.settings)>0 else settings
         self.num_settings += num_steps
+        self.__settings_to_dict(settings)
         return
     
     def measure(self):
-        """ If there are proposed settings in self.settings that have not been measured, do so.
-            The internal state of the VQE does not alter by doing so.
-        """
         num_meas = self.num_settings - self.num_outcomes
-        if num_meas > 0:
-            # run all the last prepared measurement settings
-            # from the settings list, fetch the unique settings and their respective counts
-            # the other arrays are only needed in case of self.is_adaptive
-            unique_settings, inverse, counts = np.unique(self.settings[-num_meas:],axis=0,return_inverse=True,return_counts=True)
-            
-            outcomes = {i: [] for i in range(self.repeats)}
-            ordered_settings = []
-            
-            for unique,nshots in zip(unique_settings,counts):                
-                samples = self.state.sample(meas_basis=self.state.index_to_string(unique),nshots=self.repeats*nshots)
-                for i in range(self.repeats):
-                    temp = samples[i*nshots:(i+1)*nshots]
-                    outcomes[i] = temp if len(outcomes[i])==0 else np.vstack((outcomes[i],temp))
-                temp = np.repeat(unique[np.newaxis,:],nshots,axis=0)
-                ordered_settings = temp if len(ordered_settings)==0 else np.vstack((ordered_settings,temp))
+        if num_meas == 0:
+            print("Trying to measure more measurement settings than allocated. Please allocate measurements first by calling propose_next_settings() first.")
+            return
+        if self.is_adaptive:
+            outcomes = np.zeros((num_meas,self.measurement_scheme.num_qubits),dtype=int)
+        for setting,reps in self.settings_buffer.items():
+            # measure <reps> times in <setting>
+            samples = self.state.sample(meas_basis=setting,nshots=reps)
+            if hasattr(self,"outcome_dict"):
+                self.outcome_dict[setting] = samples
             if self.is_adaptive:
-                # reorder the outcomes to the initially allocated settings
-                ordered_inds = np.repeat(range(len(counts)),repeats=counts) # current order of outcomes[i] as sampled
-                for i in range(self.repeats):
-                    reordered_outcomes = np.full(outcomes[i].shape,2,dtype=int)
-                    for ind in range(len(counts)):
-                        assert np.min(reordered_outcomes[inverse==ind]) == 2, "Error in reshuffling outcomes: trying to overwrite filled rows"
-                        reordered_outcomes[inverse==ind] = outcomes[i][ordered_inds==ind]
-                    assert np.max(reordered_outcomes) != 2, "Error in reshuffling outcomes: not all rows have been filled."
-                    outcomes[i] = reordered_outcomes
-            if self.is_adaptive or hasattr(self.measurement_scheme,"receive_outcome"):
-                for outcome in outcomes[0]:
-                    # breaking ties here as the method has to build upon a fixed instantiation of outcomes
-                    self.measurement_scheme.receive_outcome(outcome)
-                # no reordering for self.settings is needed as nothing has been overwritten
-            else:
-                # overwrite the reshuffled settings
-                self.settings[-num_meas:] = ordered_settings
-                
-            if len(self.outcomes[0]) == 0:
-                self.outcomes = outcomes
-            else:
-                for i,outcome in outcomes.items():
-                    self.outcomes[i] = np.vstack((self.outcomes[i],outcome))
-                
-            self.num_outcomes += num_meas
-        else:
-            print("No more measurements required at the moment. Please propose new setting(s) first.")
+                # reorder the outcomes to the initially allocated settings by virtue of the indices in self.order
+                outcomes[self.order[setting]] = samples
+            # write into running_avgs
+            for i,o in enumerate(self.measurement_scheme.obs):
+                if not hit_by(o,[char_to_int[c] for c in setting]):
+                    continue
+                mask = np.zeros(samples.shape,dtype=int)
+                mask += (o == 0)[np.newaxis,:]
+                temp = samples.copy()
+                temp[mask.astype(bool)] = 1 # set to 1 if outside the support of the respective hit observable to mask it out
+                self.running_avgs[i] = ( self.running_avgs[i]*self.running_N[i] + np.prod(temp,axis=1).sum() ) / (self.running_N[i] + reps)
+                self.running_N[i] += reps
+        if self.is_adaptive:
+            for outcome in outcomes:
+                # feed outcomes to measurement scheme
+                self.measurement_scheme.receive_outcome(outcome)
+        self.num_outcomes = self.num_settings
+        self.settings_buffer = {}
         return
     
     def get_energy(self):
         """ Takes the current outcomes and estimates the corresponding energy. """
-        if np.allclose(self.measurement_scheme.N_hits,0):
-            # if no obsevables are hit yet, just return the offset value
-            return self.offset
-        w = self.measurement_scheme.w
-        obs = self.measurement_scheme.obs
-        energy = np.zeros((self.repeats,len(w)))
-        N_hits = np.zeros(len(w),dtype=int) # rebuild this for consistency reasons
-        for i,outcomes in self.outcomes.items():
-            for p,outcome in zip(self.settings,outcomes):
-                is_hit = [hit_by(o,p) for o in obs]
-                N_hits += is_hit
-                N_hit  = np.sum(is_hit)
-                outcome = np.repeat(outcome.reshape((1,-1)),N_hit,axis=0)
-                outcome[obs[is_hit]==0] = 1 # set to 1 if outside the support the respective to mask it out, hit observables
-                energy[i,:][is_hit] += w[is_hit] * np.prod(outcome,axis=1)
-        if not self.is_adaptive:
-            N_hits = self.measurement_scheme.N_hits
-        # exclude those cases where N_hits == 0 to avoid dividing by 0. Due to the first if-clause, there is no empty sum here
-        measured_at_least_once = N_hits != 0
-        energy = np.sum( (energy.T)[measured_at_least_once] / N_hits[measured_at_least_once][:,np.newaxis], axis=0 )
+        energy = np.sum(self.measurement_scheme.w*self.running_avgs)
         return energy + self.offset
     
     
