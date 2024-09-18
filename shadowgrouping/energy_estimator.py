@@ -85,18 +85,26 @@ class Sign_estimator():
         self.outcomes     = []
         self.num_settings = 0
         self.num_outcomes = 0
+        self.settings_dict = {}
     
     def reset(self):
         self.setting_inds = []
         self.outcomes     = []
         self.num_settings, self.num_outcomes = 0, 0
+        self.settings_dict = {}
         self.measurement_scheme.reset()
+        
+    def clear_outcomes(self):
+        self.outcomes = []
+        self.num_outcomes = 0
         
     def propose_next_settings(self,num_steps=1):
         """ Find the <num_steps> next setting(s) via the provided measurement scheme. """
         inds = self.measurement_scheme.find_setting(num_steps)
         self.setting_inds = np.append(self.setting_inds,inds) if len(self.setting_inds)>0 else inds
         self.num_settings += num_steps
+        for ind in inds:
+            self.settings_dict[ind] = 1
         return
     
     def measure(self):
