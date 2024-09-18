@@ -119,7 +119,7 @@ class AEQuO(Shadow_Grouping):
         
         return clique
     
-    def update_variance_estimate(self):
+    def update_variance_estimate(self,update_V=True):
         """ Updates variance graph calculated with Bayesian estimates. """
         if len(self.sampled_cliques_since_update) != len(self.outcomes_since_update):
             print("Warning at step {}!".format(len(self.sampled_cliques)))
@@ -131,7 +131,8 @@ class AEQuO(Shadow_Grouping):
                 for (a0,c0),(a1,c1) in itertools.product(zip(clique,outcome),repeat=2):
                     self.outcome_dict[a0,a1][(c0,c1)] += 1
             # update variance graph
-            self.V = bayes_variance_graph(self.outcome_dict,self.coeffs).adj
+            if update_V:
+                self.V = bayes_variance_graph(self.outcome_dict,self.coeffs).adj
         return
     
     def receive_outcome(self,outcome):
