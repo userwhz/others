@@ -59,8 +59,8 @@ class L1_sampler:
     def get_Hoeffding_bound(self):
         return 2*np.exp(-0.5*self.eps**2*self.shots/np.sum(np.abs(self.w))**2)
     
-    def get_epsilon(self,delta):
-        return np.sqrt(2/self.shots*np.log(2/delta)) * np.sum(np.abs(self.w))
+    def get_epsilon_sys_stat(self,delta):
+        return (0,np.sqrt(2/self.shots*np.log(2/delta)) * np.sum(np.abs(self.w)))
 
 class Measurement_scheme:
     """ Parent class for measurement schemes. Requires
@@ -145,6 +145,7 @@ class Measurement_scheme:
         self.w = self.w[keep]
         self.obs = self.obs[keep]
         self.N_hits = self.N_hits[keep]
+        self.num_obs = len(self.w)
         return eps_sys
     
     def get_epsilon_Bernstein(self,delta):
@@ -416,6 +417,7 @@ class SettingSampler(Measurement_scheme):
         """
         data = np.loadtxt(filename)
         self.p = data[-1]
+        self.p /= np.sum(self.p)
         self.settings = data[:-1].T
         return
 
