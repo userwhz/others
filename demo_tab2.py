@@ -2,12 +2,10 @@ import numpy as np
 from shadowgrouping.benchmark import load_dict
 from shadowgrouping.molecules import available_molecules, available_molecules_latex, available_molecules_E_GS
 from shadowgrouping.hamiltonian import mappings
-from demo_tab1 import TexTable
 import argparse
 
 ######### Folder default for data storage. Can be overriden by optional argument to script #########
 folder = "data/tab2/"
-folder_single_shot = "data/tab2/"
 ####################################################################################################
 parser = argparse.ArgumentParser(description="Recreate the plots from a given data folder. Defaults to showing the data from the manuscript plots but can be altered to use custom data. To do so, use the -f <folder_location> option. In this case, all data has to lie in the same folder")
 parser.add_argument("-f","--folder", type=str,
@@ -43,12 +41,56 @@ def read_energy_estimations(filedir,molecule_name,mapping_name,method_name,num_r
     RMSE_std = np.std(temp) if use_one_norm else np.sqrt(np.std(temp))
     return RMSE, RMSE_std/np.sqrt(len(temp)), E_GS
 
+class TexTable():
+    """ Convenience class for bringing the single energy estimations from various sources into one digestiable LaTeX table.
+        The defining features of the table are the molecules with their respective TeX-names and ground-state energy E_GS.
+        For each of them, we further split into various provided mappings and measurement allocation methods as well.
+        For each combination of (molecule,mapping,method) there has to be an entry in the dictionary RMSE_dict, otherwise it is omitted.
+        If values for standard deviation are provided, also plots them to file.
+    """
+    def __init__(self,RMSE_dict,molecule_names,mapping_names,method_names,E_GS,molecule_texnames,std=None):
+        self.dict = RMSE_dict
+        self.molecules = molecule_names
+        self.mappings  = mapping_names
+        self.methods   = method_names
+        self.energies  = E_GS
+        self.molec_tex = molecule_texnames
+        self.print_std = std is not None
+        self.stds      = std if self.print_std else {}
+        
+    def get_rmse_rows(self):
+        """ Run through all combinations of (molecule,mapping) and track the best performaning method for each. """
+        best_method_idxs = []
+        rows = []
+        rows_std = []
+        for molecule in self.molecules:
+            rows_mol = []
+            stds_mol = []
+            for mapping in self.mappings:
+                temp = []
+                temp_stds = []
+                for method in self.methods:
+                    temp.append(self.dict.get((molecule,mapping,method),np.infty))
+                    if temp[-1] < np.infty:
+                        temp_stds.append(self.stds.get((molecule,mapping,method),-1))
+                    else:
+                        temp_stds.append(-1)
+                rows_mol.append(np.array(temp))
+                stds_mol.append(np.array(temp_stds))
+                # get the index of the minimum value over the methods
+                temp = np.argmin(rows_mol[-1])
+                if not rows_mol[-1][temp] < np.infty:
+                    temp = -1
+                best_method_idxs.append(temp)
+            rows.append(np.array(rows_mol))
+            rows_std.append(np.array(stds_mol))
+        return np.array(rows), np.array(rows_std), np.array(best_method_idxs)
+
 
 if __name__=="__main__":
     args = parser.parse_args()
     if args.folder != folder:
         folder = args.folder
-        folder_single_shot = folder
     rmse_dict_methods = {}
     std_dict_methods  = {}
     for ind,molecule_name in enumerate(available_molecules):
@@ -73,7 +115,7 @@ if __name__=="__main__":
 
     # add estimate of the sinlge shot estimator to dictionaries
     for (molecule_name,map_name,_) in rmse_dict_methods.copy().keys():
-        rmse, std, _ = read_energy_estimations(folder_single_shot,molecule_name,"L1_check",map_name)
+        rmse, std, _ = read_energy_estimations(folder,molecule_name,"L1_check",map_name)
         rmse_dict_methods[(molecule_name,map_name,"SingleShot")] = rmse
         std_dict_methods[(molecule_name,map_name,"SingleShot")] = std
 
