@@ -6,8 +6,8 @@ from demo_tab1 import TexTable
 import argparse
 
 ######### Folder default for data storage. Can be overriden by optional argument to script #########
-folder = "data/tab1/"
-folder_single_shot = "data/tab3/"
+folder = "data/tab2/"
+folder_single_shot = "data/tab2/"
 ####################################################################################################
 parser = argparse.ArgumentParser(description="Recreate the plots from a given data folder. Defaults to showing the data from the manuscript plots but can be altered to use custom data. To do so, use the -f <folder_location> option. In this case, all data has to lie in the same folder")
 parser.add_argument("-f","--folder", type=str,
