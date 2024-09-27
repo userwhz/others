@@ -171,9 +171,6 @@ class Energy_estimator():
         self.running_avgs = np.zeros_like(self.measurement_scheme.w)
         self.running_N    = np.zeros(len(self.running_avgs),dtype=int)
         self.num_outcomes = 0
-        if self.S is not None:
-            self.running_Z_mean = 0.0
-            self.running_Z_samples = 0
         if hasattr(self,"outcome_dict"):
             self.outcome_dict = {}
         return
