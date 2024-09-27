@@ -34,6 +34,18 @@ def save_to_json(diction,filename):
             json.dump(diction, f, cls=NumpyEncoder)
         return
     
+def load_dict(filename):
+    outdict = {}
+    with open(filename, "r") as f:
+        f.readline()
+        for line in f.readlines():
+            vals = line.strip().split()
+            key = vals[0]
+            if key in outdict.keys():
+                key += "+"
+            outdict[key] = (float(vals[1]),float(vals[2]))
+    return outdict
+    
 def load_settings(filename,estimator,N=None):
     estimator.reset()
     with open(filename, 'r') as f:
