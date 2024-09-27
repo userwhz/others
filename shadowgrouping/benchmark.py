@@ -1,4 +1,5 @@
-from shadowgrouping.measurement_schemes import N_delta, hit_by, char_to_int
+from shadowgrouping.measurement_schemes import N_delta, hit_by
+from shadowgrouping.hamiltonian import char_to_int
 import numpy as np
 from copy import deepcopy
 import json
@@ -56,12 +57,11 @@ def load_settings(filename,estimator,N=None):
         estimator.measurement_scheme.N_hits[is_hit] += reps
     return estimator
 
-def track_method_epsilon(estimator,E_GS,delta,benchmark_params={"Nshots":1000, "Nreps": 100, "Nsteps": 10, "truncate": False, "Nstart": None, "settings_filename": None,"load_at": None,"save_outcomes": False}):
+def track_method_epsilon(estimator,E_GS,delta,benchmark_params={"Nshots":1000, "Nreps": 100, "Nsteps": 10, "truncate": False, "Nstart": None, "settings_filename": None,"load_at": None}):
     assert isinstance(benchmark_params,dict) or benchmark_params is None, "benchmark_params have to be either None or a dictionary."
     if benchmark_params is None:
         benchmark_params = {}
     # preprocessing of benchmark params
-    save_outcomes = benchmark_params.get("save_outcomes",False)
     Nshots        = max(1,benchmark_params.get("Nshots",10000))
     Nreps         = max(1,benchmark_params.get("Nreps",100))
     Nsteps        = max(2,benchmark_params.get("Nsteps",40))
@@ -132,15 +132,11 @@ def track_method_epsilon(estimator,E_GS,delta,benchmark_params={"Nshots":1000, "
             assert estimator.num_settings == load_at_N, "Loading settings from file did not work."
             N_current = load_at_N
             filename += "_long"
-        if save_outcomes:
-            outcome_dict = {str(N): {} for N in N_steps}
-            estimator.toggle_outcome_tracking()
         for i,Nval in enumerate(N_steps):
             estimator.propose_next_settings(Nval-N_current)
             for j in range(Nreps):
                 estimator.clear_outcomes()
                 estimator.measure()
-                outcome_dict[str(Nval)][j] = estimator.outcome_dict
                 energies[j,i] = estimator.get_energy()
             temp = abs(energies[:,i] - E_GS)
             eps_empirical[i] = np.mean(temp)
@@ -150,11 +146,6 @@ def track_method_epsilon(estimator,E_GS,delta,benchmark_params={"Nshots":1000, "
             if save_dicts:
                 saved_settings[str(Nval)] = estimator.settings_dict
                 save_to_json(saved_settings,filename)
-            if save_outcomes:
-                # append and delete outcome tag
-                filename += "_outcomes"
-                save_to_json(outcome_dict,filename)
-                filename = filename[:-9]
         if truncate:
             saved_settings_trunc = {}
             N_current = 0
