@@ -1,101 +1,159 @@
-from shadowgrouping.measurement_schemes import N_delta, SettingSampler
-from shadowgrouping.molecules import CHEMICAL_ACCURACY, available_molecules
-from shadowgrouping.hamiltonian import mappings
 import numpy as np
 import matplotlib.pyplot as plt
+import os
 from os import mkdir
 from os.path import isdir
-import argparse
 
 ######### Folder default for data storage. Can be overriden by optional argument to script #########
 folder = "data/fig5/"
-file_name_base = "molecule_{}_mapping_{}_basis_{}.txt"
-name = "OGM_{}_{}{}.txt"
-delta = 0.02
+folder_thermal = folder + "data_thermal/"
+folder_depolar = folder + "data_depolar/"
+mappings = ("JW","BK","Parity")
+file_structure_thermal = folder_thermal + "H2_6-31G_molecule_ShadowBernstein_method_{}_beta_{}.txt"
+file_structure_depolar = folder_depolar + "energy_abs_diffs_{}_p_{}.txt"
 ####################################################################################################
-parser = argparse.ArgumentParser(description="Recreate the plots from a given data folder. Defaults to showing the data from the manuscript plots but can be altered to use custom data. To do so, use the -f <folder_location> option.")
-parser.add_argument("-f","--folder", type=str,
-                    help="Provide the folder where the data resides. Default: {}".format(folder),
-                    default=folder
-                   )
+def pretty_print_exponents(pre,exp):
+    out = r"$"
+    if pre is None:
+        if exp is None:
+            out += "1$"
+        else:
+            out += "10^{"+str(exp)+"}$"
+        return out
+    else:
+        out +="{:.2f}".format(pre)
+    if exp is None:
+        out += "$"
+    else:
+        out += "\cdot 10^{"+str(exp)+"}$"
+    return out
 
-def get_Ham_details(fname):
-    with open(fname,"r") as f:
-        num_qubits = int(f.readline().strip().split("=")[-1])
-        num_terms  = int(f.readline().strip().split("=")[-1])
-        one_norm   = float(f.readline().strip().split("=")[-1])
-    return num_qubits,num_terms,one_norm
 
-# load |h| for each molecule and basis choice.
-# This norm is independent of the fermion-to-qubit mapping, but the number of terms may vary. Hence, we minimize over this number.
-# We also keep track of the largest qubit number for convenience
 if __name__ == "__main__":
-    args = parser.parse_args()
-    folder = args.folder
     # create temporary folder for storing outputs
     if not isdir("generated_figures"):
         mkdir("generated_figures")
-    num_max = 0
-    norm_dict = {"sto3g":{},"6-31g":{}}
-    for basis in norm_dict.keys():
-        for molecule_name in available_molecules:
-            if molecule_name.find("_")!=-1:
-                continue
-            M_min = int(1e12)
-            for map_name in mappings.keys():
-                temp_file_name = folder+file_name_base.format(molecule_name,map_name,basis)
-                try:
-                    num_qubits, M, norm = get_Ham_details(temp_file_name)
-                except Exception as e:
-                    print(e)
-                else:
-                    M_min = min(M_min,M)
-                    num_max = max(num_max,num_qubits)
-            norm_dict[basis][molecule_name] = (num_qubits, M_min, norm)
+        
+    # get depolar data
+    files = [file for file in os.listdir(folder_depolar) if file.find("H2_") >= 0 and file.find("energy") < 0]
+    p = np.round(np.arange(0,1.1,0.1),1)
+    E_GS = 2
+    offset = 1
+    p_plot = np.linspace(0,1,100)
+        
+    # get thermal data
+    files = [file for file in os.listdir(folder_thermal) if file.find("H2_") >= 0 and file.find("energies") < 0 and file.find("beta")>=0]
+    betas = []
+    betas_print = []
+    for file in files:
+        betas.append(float(file[:-4].split("_")[-1]))
+    betas = np.unique(betas)
+    for beta in betas:
+        exponent = int(np.floor(np.log10(beta)))
+        prefactor = None if abs(10**exponent - beta) < 1e-3 else np.round(beta*10**(-exponent),2)
+        if exponent == 0:
+            exponent = None
+        betas_print.append((prefactor,exponent))
+    
+    beta_cont, Evals_cont = np.loadtxt(folder_thermal+"plot_data_continous.txt",unpack=True,skiprows=2)
+    beta_samp, Evals_samp = np.loadtxt(folder_thermal+"plot_data_sampled.txt",unpack=True,skiprows=2)
+    with open(folder_thermal+"plot_data_continous.txt","r") as f:
+        E_GS = float(f.readline().strip().split(" ")[-1])
+        offset = float(f.readline().strip().split(" ")[-1])
+    
+    plt.figure(figsize=(16,8))
 
-    y_min, y_max = np.infty, 0
-    f = N_delta(delta)**2
-    for (basis,dict_mol),color in zip(norm_dict.items(),("r","b")):
-        if basis=="sto3g":
-            cliques = {}
-            # get the number of overlapping cliques and minimize over mappings
-            for molecule,(n,_,_) in dict_mol.items():
-                num_cliques = np.infty
-                for map_name in mappings.keys():
-                    method = SettingSampler(np.random.rand(10,n),np.random.rand(10),folder+name.format(molecule,n,map_name.lower()))
-                    num_cliques = min(len(method.p),num_cliques)
-                cliques[molecule] = num_cliques
-        bottom = False
-        jitter_direction = -1
-        for molecule,(n,nterms,norm) in dict_mol.items():
-            norm*= norm*f/CHEMICAL_ACCURACY**2
-            y_min, y_max = min(y_min,norm), max(y_max,norm*nterms)
-            if molecule == "NH3":
-                continue
-            jitter = 0.25*jitter_direction if n==14 or n==26 else 0
-            jitter_direction *= -1 if n==14 or n==26 else 1
-            plt.errorbar(n+jitter,norm,yerr=np.array([[0],[nterms*norm]]),color=color)
-            if basis=="sto3g":
-                plt.plot(n+jitter,cliques[molecule]*norm,"g*")
-            if bottom:
-                plt.text(n+jitter-0.5,norm*0.5,molecule,fontsize=14)
-            else:
-                plt.text(n+jitter-0.5,norm*nterms*1.5,molecule,fontsize=14)
-            bottom = not bottom
-        # exception for NH3
-        n, nterms, norm = dict_mol["NH3"]
-        norm_rescaled = norm**2/CHEMICAL_ACCURACY**2*f
-        plt.errorbar(n,norm_rescaled,yerr=np.array([[0],[nterms*norm_rescaled]]),label=basis,color=color)
-        if basis=="sto3g":
-            plt.plot(n,cliques["NH3"]*norm_rescaled,"g*")
-        plt.text(n+0.15,norm_rescaled*10**(np.log10(nterms)/2),"NH3",fontsize=14)
-    plt.xlim(3,num_max*1.1)
-    plt.xlabel("Number of qubits",fontsize=18)
-    plt.xticks(fontsize=16)
-    plt.semilogy()
-    plt.ylim(0.8*y_min,1.5*y_max)
-    plt.ylabel("Required measurements",fontsize=18)
-    plt.yticks(fontsize=16)
+    # add lineplot for thermal energies and from where sampling took place
+    ax = plt.subplot(241)
+    plt.semilogx(beta_cont,Evals_cont+offset)
+    plt.hlines(offset,1e-4,1,colors="black",linestyles="dotted")
+    plt.hlines(E_GS,1,1e3,colors="black",linestyles="dotted")
+    plt.xlim(0.6*beta_cont[0],beta_cont[-1])
+    plt.xlabel(r"Inverse temperature $\beta$",fontsize="xx-large")
+    plt.xticks(np.logspace(-4,2,4),fontsize="x-large")
+    plt.ylabel(r"$E = \mathrm{Tr}[H\rho]$ [Ha]",fontsize="xx-large")
+    #ax.yaxis.set_label_position("right")
+    #ax.yaxis.set_ticks_position("right")
+    plt.yticks(np.arange(-1,1.1),["-1","0","1"],fontsize="x-large")
+    for x,y,s in zip((7,3e-1),(offset,E_GS),("offset",r"$E_\mathrm{GS}$")):
+        plt.text(x,y,s,fontsize="x-large",horizontalalignment="center",verticalalignment="center")
+    # add sampled data points to line
+    for beta,E in zip(beta_samp,Evals_samp):
+        plt.plot(beta,E+offset,marker="*",markersize=10)
     plt.grid()
-    plt.legend(loc="upper left",fontsize=16)
+
+    for i,map_name in enumerate(mappings):
+        if i==0:
+            ax0 = plt.subplot(242+i)
+            ax = ax0
+        else:
+            ax = plt.subplot(242+i,sharey=ax)
+        plt.loglog([],[],label=r"$\beta =$",linewidth=0)
+        for beta,beta_pr in zip(betas,betas_print):
+            N,rmse,std, _ = np.loadtxt(file_structure_thermal.format(map_name,beta),skiprows=1,unpack=True)
+            plt.errorbar(N,rmse,yerr=std,label=pretty_print_exponents(*beta_pr))
+        plt.text(0.075,0.9,map_name,transform=ax.transAxes,fontsize="xx-large",bbox=dict(facecolor='white', edgecolor="white", alpha=0.2))
+        plt.ylim(1e-3,1e-1)
+        plt.xlim(0.95e4,1.05e5)
+
+        if i==2:
+            ax.yaxis.set_label_position("right")
+            ax.yaxis.set_ticks_position("right")
+            plt.ylabel(r"$\vert \hat E - E \vert$ [Ha]",fontsize="xx-large")
+            #ax.yaxis.set_label_coords(-0.25,1.1)
+            plt.yticks(fontsize="x-large")
+        else:
+            ax.yaxis.set_tick_params(length=0,width=0,labelsize=0)
+            ax.yaxis.set_ticks_position("right")
+        plt.xticks(fontsize="x-large")
+        plt.grid(which="both",axis="x")
+        plt.grid(which="both",axis="y")
+
+    # add lineplot for dep. energies and from where sampling took place
+    ax = plt.subplot(245)
+    plt.plot(p_plot,(1-p_plot)*E_GS+p_plot*offset)
+    plt.xlim(-0.05,1.05)
+    plt.xlabel(r"Depolariz. parameter $p$",fontsize="xx-large")
+    plt.xticks(fontsize="x-large")
+    #plt.ylabel(r"$E_p = \mathrm{Tr}[H\rho_p]$",fontsize="xx-large")
+    plt.yticks([offset,E_GS],[r"$E(p=1)$",r"$E(p=0)$"],fontsize="x-large")
+    plt.ylim(offset - 0.5*(E_GS - offset), 1.15*E_GS)
+    # add sampled data points to line
+    for pval in p:
+        plt.plot(pval,(1-pval)*E_GS+pval*offset,marker="*",markersize=10)
+    plt.text(0.5,offset - 0.25*(E_GS - offset),r"$\rho_p = (1-p) \vert \psi \rangle \langle \psi \vert + \frac{p}{d}\ 1$",
+             fontsize="xx-large",horizontalalignment="center",verticalalignment="center",bbox=dict(facecolor='white', edgecolor="white", alpha=0.1))
+    plt.grid()
+    for i,map_name in enumerate(mappings):
+        if i==0:
+            ax0 = plt.subplot(246+i)
+            ax = ax0
+        else:
+            ax = plt.subplot(246+i,sharey=ax)
+        plt.loglog()
+        for pval in p:
+            N,rmse,std, _ = np.loadtxt(file_structure_depolar.format(map_name,pval),unpack=True)
+            plt.errorbar(N,rmse,yerr=std)
+        plt.text(0.075,0.9,map_name,transform=ax.transAxes,fontsize="xx-large",bbox=dict(facecolor='white', edgecolor="white", alpha=0.2))
+        plt.ylim(1e-3,1e-1)
+        plt.xlim(0.95e4,1.05e5)
+
+        if i==1:
+            plt.xlabel("Number of measurements [log.]",fontsize="xx-large")
+            ax.yaxis.set_tick_params(length=0,width=0,labelsize=0)
+            ax.yaxis.set_ticks_position("right")
+        if i==2:
+            ax.yaxis.set_label_position("right")
+            ax.yaxis.set_ticks_position("right")
+            plt.ylabel(r"$\vert \hat E - E \vert$ [Ha]",fontsize="xx-large")
+            plt.yticks(fontsize="x-large")
+        else:
+            ax.yaxis.set_tick_params(length=0,width=0,labelsize=0)
+            ax.yaxis.set_ticks_position("right")
+        plt.xticks(fontsize="x-large")
+        plt.grid(which="both",axis="x")
+        plt.grid(which="both",axis="y")
+
+    plt.subplots_adjust(hspace=0.25,wspace=0.1)
     plt.savefig("generated_figures/fig5_demo.png",bbox_inches="tight")
+    plt.show()
