@@ -13,7 +13,12 @@ delta = 0.02
 
 # plot specifics for bar plots
 top_threshold = 1e8
-methods  = ['ShadowBernstein', 'AdaptivePaulis', 'AEQuO-naive', 'OverlappedGroupingNew','RandomPaulis']
+
+def load_json(filename):
+    with open(filename,"r") as f:
+        data = json.load(f)
+    return data
+methods = list(load_json(folder+"H2_6-31g.json")["H2_6-31g"]["JW"]["empirical"].keys())
 map_names = ["JW","BK","Parity"]
 width = 0.8
 align = "center"
@@ -35,11 +40,6 @@ shots_dict = {
     "H2O": int(3e7),
     "NH3": int(3e7)
 }
-
-def load_json(filename):
-    with open(filename,"r") as f:
-        data = json.load(f)
-    return data
 
 def get_cmap(n, name='hsv'):
     '''Returns a function that maps each index in 0, 1, ..., n-1 to a distinct 
@@ -121,6 +121,8 @@ if __name__ == "__main__":
     plt.figure(figsize=(12,6))
     plt.subplot(121)
     for d,deltaD,pos,method in zip(data,data_Delta,bar_pos,methods):
+        if method == "Derandomization":
+            continue
         filtered = np.bitwise_and(d >= 0, d < top_threshold)
         if np.sum(filtered) == 0:
             continue
@@ -171,7 +173,7 @@ if __name__ == "__main__":
         with open(folder+molecule_name+"_fit_params.json","r") as f:
             data = json.load(f)
         for i,map_name in enumerate(map_names):
-            popt,pcov = data[map_name]["empirical"]["ShadowBernstein"]
+            popt,pcov = data[map_name]["empirical"]["ShadowGrouping"]
             dA,dC = np.sqrt(np.diag(pcov))
             epsilon_extrapolation[3*molecule_ind+i] = fit_func(N,*popt) / chem_acc
             delta_extrapolation[3*molecule_ind+i]   = fit_func(N,dA,popt[-1]) / chem_acc + epsilon_extrapolation[3*molecule_ind+i]*np.log(N)*dC

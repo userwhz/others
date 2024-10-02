@@ -12,9 +12,14 @@ delta = 0.02
 
 # plot specifics for bar plots
 top_threshold = 1e24
-methods  = ['ShadowBernstein', 'AdaptivePaulis', 'AEQuO-naive', 'OverlappedGroupingNew','RandomPaulis']
 width = 0.8
 align = "center"
+
+def load_json(filename):
+    with open(filename,"r") as f:
+        data = json.load(f)
+    return data
+methods = list(load_json(folder+"H2_6-31g.json")["H2_6-31g"]["JW"]["empirical"].keys())
 width_single = width / (len(methods) + 1)
 available_molecules = available_molecules[1:] # do not show data for H2 molecule comprised of 4 qubits
 bar_pos = np.arange(len(available_molecules))[np.newaxis,:] + width_single*(np.arange(len(methods)+1)+-0.5*len(methods))[:,np.newaxis]
@@ -23,11 +28,6 @@ bar_pos = np.arange(len(available_molecules))[np.newaxis,:] + width_single*(np.a
 ####################################################################
 
 threshold = int(np.ceil(N_delta(delta)))
-
-def load_json(filename):
-    with open(filename,"r") as f:
-        data = json.load(f)
-    return data
 
 def get_cmap(n, name='hsv'):
     '''Returns a function that maps each index in 0, 1, ..., n-1 to a distinct 
@@ -95,8 +95,6 @@ if __name__ == "__main__":
         for i,method in enumerate(keys):
             label = method if j==1 else ""
             if method =="OverlappedGrouping":
-                continue
-            elif method == "OverlappedGroupingNew":
                 Nvals = Nrec_OGM
                 filt_p = filtered_prov_new
             else:
@@ -144,6 +142,8 @@ if __name__ == "__main__":
 
         plt.subplot(334+j)
         for d,deltaD,pos,method in zip(data,data_Delta,bar_pos,methods):
+            if method == "Derandomization":
+                continue
             filtered = np.bitwise_and(d >= 0, d < top_threshold)
             if np.sum(filtered) == 0:
                 continue
@@ -164,6 +164,8 @@ if __name__ == "__main__":
 
         plt.subplot(337+j)
         for c,deltaC,pos,method in zip(data_c,data_Delta_c,bar_pos,methods):
+            if method == "Derandomization":
+                continue
             plt.bar(pos, c, yerr=deltaC, color = cmap(np.argmax([method==key for key in keys])), width = width_single, capsize=5,
                 edgecolor ='grey', label =method, zorder=3, align=align)
 
