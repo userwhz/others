@@ -28,7 +28,7 @@ class Bernstein_bound():
         condition = N_hits != 0
         N = np.sqrt(N_hits[condition])
         Nplus1 = np.sqrt(N_hits[condition] + 1)
-        inconf[condition] /= self.alpha*np.sqrt(N*Nplus1)/(Nplus1-N)
+        inconf[condition] /= self.alpha*N*Nplus1/(Nplus1-N)
         return inconf
     
     def __call__(self):

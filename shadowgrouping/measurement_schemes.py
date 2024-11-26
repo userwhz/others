@@ -130,7 +130,7 @@ class Measurement_scheme:
         """
         N_unmeasured = np.sum(self.N_hits == 0)
         if N_unmeasured > 0:
-            print("Warning! {} observable(s) have been measured at least once.".format(N_unmeasured))
+            print("Warning! {} observable(s) have not been measured at least once.".format(N_unmeasured))
             print("If you have set alpha large, this can result in a non-optimal truncation.")
         N_crit = N_delta(delta)
         keep = self.N_hits > int(N_crit) # round down to integer value

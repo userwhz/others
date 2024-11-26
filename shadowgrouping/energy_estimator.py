@@ -152,8 +152,6 @@ class Energy_estimator():
             self.update_steps = np.array(measurement_scheme.update_steps)
             self.order = {}
             assert hasattr(measurement_scheme,"receive_outcome"), "The given method does not have the function receive_outcome()."
-        self.running_avgs = np.zeros_like(self.measurement_scheme.w)
-        self.running_N    = np.zeros(len(self.running_avgs),dtype=int)
         
     def reset(self):
         self.running_avgs = np.zeros_like(self.measurement_scheme.w)
