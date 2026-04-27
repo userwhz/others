@@ -77,7 +77,7 @@ class Hamiltonian():
         ground_state = evectors[:,index]
         return ground_energy, ground_state
 
-def load_pauli_list(folder_hamiltonian,molecule_name,basis_name,encoding,verbose=False,sparse=False,diagonalize=True):
+def load_pauli_list(folder_hamiltonian,molecule_name,basis_name,encoding,verbose=False,sparse=False,diagonalize=True, suiji = 1):
     """ Loads the Pauli operators and the corresponding ground-state energy from the files of
         https://github.com/charleshadfield/adaptiveshadows
         Requires the name of the folder where all the Hamiltonians are stored together with the selection of the
@@ -95,46 +95,49 @@ def load_pauli_list(folder_hamiltonian,molecule_name,basis_name,encoding,verbose
     
     # open folder where the Hamiltonians of various encodings are stored
     available_folders = os.listdir(folder_hamiltonian)
-    folder_name = None
-    for folder in available_folders:
-        if folder[:len_name] == molecule_name + "_" + basis_name:
-            folder_name = folder
-    assert folder_name is not None, "File not found for molecule {} and basis set {}".format(molecule_name,basis_name)
+    # folder_name = None
+    # for folder in available_folders:
+    #     if folder[:len_name] == molecule_name + "_" + basis_name:
+    #         folder_name = folder
+    # assert folder_name is not None, "File not found for molecule {} and basis set {}".format(molecule_name,basis_name)
     
     # open file where the Hamiltonian of the specified encoding is stored
-    available_files = os.listdir(folder_hamiltonian + folder_name)
-    file_name = None
-    file_energy = None
-    for file in available_files:
-        if file[:2] == encoding[:2].lower() and file.find("grouped") == -1:
-            file_name = file
-        elif file == "ExactEnergy.txt":
-            file_energy = file
-    assert file_name   is not None, "File not found for encoding {}".format(encoding)
-    assert file_energy is not None, "File not found for ground-state energy."
-    
-    if diagonalize:
-        # read ground-state energy from file
-        full_file_name = os.path.join(folder_hamiltonian,folder_name,file_energy)
-        with open(full_file_name,"r") as f:
-            E_GS = float(f.readline().strip().split()[-1])
-    else:
-        E_numerics = None
-        state = None
+    # available_files = os.listdir(folder_hamiltonian + folder_name)
+    # file_name = None
+    # file_energy = None
+    # for file in available_files:
+    #     if file[:2] == encoding[:2].lower() and file.find("grouped") == -1:
+    #         file_name = file
+    #     elif file == "ExactEnergy.txt":
+    #         file_energy = file
+    # assert file_name   is not None, "File not found for encoding {}".format(encoding)
+    # assert file_energy is not None, "File not found for ground-state energy."
+
+    folder_name = "H2"
+    file_name = f"H2_{suiji}_sto-3g_sg.txt"
+    # file_name = "stabilizer_422.txt"
+    # if diagonalize:
+    #     # read ground-state energy from file
+    #     full_file_name = os.path.join(folder_hamiltonian,folder_name,file_energy)
+    #     with open(full_file_name,"r") as f:
+    #         E_GS = float(f.readline().strip().split()[-1])
+    # else:
+    #     E_numerics = None
+    #     state = None
     
     # extract Pauli list from file
     full_file_name = os.path.join(folder_hamiltonian,folder_name,file_name)
     data = np.loadtxt(full_file_name,dtype=object)
     paulis, weights = data[::2].astype(str), data[1::2].astype(complex).real
-    
-    if diagonalize:
-        # use Pauli list to create Hamiltonian and diagonalize it afterwards to obtain ground-state
-        H = Hamiltonian(weights,paulis)
-        E_numerics, state = H.ground(sparse=sparse)
-        if abs(E_GS-E_numerics) >= 1e-6:
-            print("Warning: Recorded value for the energy deviates significantly from numerical estimate!")
-            print("Recorded:",E_GS)
-            print("Calculated:",E_numerics)
+    print("len(weights)", len(weights))
+    # if diagonalize:
+    #     # use Pauli list to create Hamiltonian and diagonalize it afterwards to obtain ground-state
+    #     H = Hamiltonian(weights,paulis)
+    #     E_numerics, state = H.ground(sparse=sparse)
+    #     if abs(E_GS-E_numerics) >= 1e-6:
+    #         print("Warning: Recorded value for the energy deviates significantly from numerical estimate!")
+    #         print("Recorded:",E_GS)
+    #         print("Calculated:",E_numerics)
     
     # Pauli item "III...II" in list should correspond to energy offset
     ind = -1
@@ -146,8 +149,10 @@ def load_pauli_list(folder_hamiltonian,molecule_name,basis_name,encoding,verbose
     if ind == -1:
         offset = 0
         obs = paulis
+        print("a")
         w = weights
     else:
+        print("b")
         offset = weights[ind]
         # erase the corresponding entry in paulis and weights
         obs = np.delete(paulis,ind)
@@ -163,10 +168,447 @@ def load_pauli_list(folder_hamiltonian,molecule_name,basis_name,encoding,verbose
             if i == 9:
                 print("\t","...")
                 break
-    
+
     # convert string characters to integers
     observables = np.array([[char_to_int[c] for c in o] for o in obs],dtype=int)
+    state = np.load(f"haozhaowu/H2/ground_state_H2_{suiji}_sto-3g_density_matrix.npy")
+    # state = np.load(f"AlgeState/PauliAlgebraDensityState1.npy")
+
+    # state = np.load("422_density_matrix_part.npy")
+    init_obs = np.load(f"haozhaowu/H2/H2_{suiji}_sto-3g.npy")
+    # init_obs = np.load("422_stabilizer_density_matrix_part.npy")
+    E_numerics = np.trace(init_obs @ state)
     
+    return observables, w, offset, E_numerics, state
+
+
+def load_pauli_list3(folder_hamiltonian, molecule_name, basis_name, encoding, verbose=False, sparse=False,
+                    diagonalize=True, suiji=1):
+    """ Loads the Pauli operators and the corresponding ground-state energy from the files of
+        https://github.com/charleshadfield/adaptiveshadows
+        Requires the name of the folder where all the Hamiltonians are stored together with the selection of the
+        molecule, basis set and encoding. If verbose is set to True, some elements of the Pauli list are printed to console.
+        If sparse is set to True, carries out the numerical diagonalization on a sparse form of the Hamiltonian.
+        If diagonalize is set to False, only returns the Pauli decomposition from file and sets all other return values to None.
+
+        Returns the observables, their respective weight, the offset energy and the exact ground-state energy.
+    """
+    # match basis set naming scheme to saved files
+    basis_matcher = {"sto3g": "STO3g", "6-31g": "6-31G"}
+    basis_name = "sto3g"
+    basis_name = basis_matcher[basis_name]
+
+    len_name = len(molecule_name) + len(basis_name) + 1  # for underscore char in naming scheme
+
+    # open folder where the Hamiltonians of various encodings are stored
+    available_folders = os.listdir(folder_hamiltonian)
+    # folder_name = None
+    # for folder in available_folders:
+    #     if folder[:len_name] == molecule_name + "_" + basis_name:
+    #         folder_name = folder
+    # assert folder_name is not None, "File not found for molecule {} and basis set {}".format(molecule_name,basis_name)
+
+    # open file where the Hamiltonian of the specified encoding is stored
+    # available_files = os.listdir(folder_hamiltonian + folder_name)
+    # file_name = None
+    # file_energy = None
+    # for file in available_files:
+    #     if file[:2] == encoding[:2].lower() and file.find("grouped") == -1:
+    #         file_name = file
+    #     elif file == "ExactEnergy.txt":
+    #         file_energy = file
+    # assert file_name   is not None, "File not found for encoding {}".format(encoding)
+    # assert file_energy is not None, "File not found for ground-state energy."
+
+    # txt文件
+    folder_name = "LiH/hamil_class"
+
+    file_name = f"hamiltonian_LiH_{suiji}_pauli.txt"
+    # file_name = "stabilizer_422.txt"
+    # if diagonalize:
+    #     # read ground-state energy from file
+    #     full_file_name = os.path.join(folder_hamiltonian,folder_name,file_energy)
+    #     with open(full_file_name,"r") as f:
+    #         E_GS = float(f.readline().strip().split()[-1])
+    # else:
+    #     E_numerics = None
+    #     state = None
+
+    # extract Pauli list from file
+    full_file_name = os.path.join(folder_hamiltonian, folder_name, file_name)
+    data = np.loadtxt(full_file_name, dtype=object)
+    paulis, weights = data[::2].astype(str), data[1::2].astype(complex).real
+    print("len(weights)", len(weights))
+    # if diagonalize:
+    #     # use Pauli list to create Hamiltonian and diagonalize it afterwards to obtain ground-state
+    #     H = Hamiltonian(weights,paulis)
+    #     E_numerics, state = H.ground(sparse=sparse)
+    #     if abs(E_GS-E_numerics) >= 1e-6:
+    #         print("Warning: Recorded value for the energy deviates significantly from numerical estimate!")
+    #         print("Recorded:",E_GS)
+    #         print("Calculated:",E_numerics)
+
+    # Pauli item "III...II" in list should correspond to energy offset
+    ind = -1
+    identity = "I" * len(paulis[0])
+    for i, p in enumerate(paulis):
+        if p == identity:
+            ind = i
+            break
+    if ind == -1:
+        offset = 0
+        obs = paulis
+        print("a")
+        w = weights
+    else:
+        print("b")
+        offset = weights[ind]
+        # erase the corresponding entry in paulis and weights
+        obs = np.delete(paulis, ind)
+        w = np.delete(weights, ind)
+        assert len(obs) == len(paulis) - 1, "Error in line eraser."
+        assert len(obs) == len(w), "Both arrays are not of equal length anymore."
+
+    # print some to console
+    if verbose:
+        print("Offset", "\t\t", offset)
+        for i, (p, we) in enumerate(zip(obs, w)):
+            print(p, "\t", we)
+            if i == 9:
+                print("\t", "...")
+                break
+
+    # convert string characters to integers
+    observables = np.array([[char_to_int[c] for c in o] for o in obs], dtype=int)
+    state = np.load(f"haozhaowu/LiH/hamil_class/state_LiH_rho_{suiji}.npy")
+    # state = np.load(f"AlgeState/PauliAlgebraDensityState1.npy")
+
+    # state = np.load("422_density_matrix_part.npy")
+    init_obs = np.load(f"haozhaowu/LiH/hamil_class/hamiltonian_LiH_{suiji}.npy")
+    # init_obs = np.load("422_stabilizer_density_matrix_part.npy")
+    E_numerics = np.trace(init_obs @ state)
+
+    return observables, w, offset, E_numerics, state
+
+def load_pauli_list4(folder_hamiltonian, molecule_name, basis_name, encoding, verbose=False, sparse=False,
+                    diagonalize=True):
+    basis_matcher = {"sto3g": "STO3g", "6-31g": "6-31G"}
+    basis_name = "sto3g"
+    basis_name = basis_matcher[basis_name]
+
+    len_name = len(molecule_name) + len(basis_name) + 1  # for underscore char in naming scheme
+
+    available_folders = os.listdir(folder_hamiltonian)
+    # txt文件
+    folder_name = "klocal/hamil_class"
+
+    base_name = "hamiltonian_klocal_random_n7_k4_terms1000"
+    file_name = f"{base_name}_pauli.txt"
+
+
+    # extract Pauli list from file
+    full_file_name = os.path.join(folder_hamiltonian, folder_name, file_name)
+    data = np.loadtxt(full_file_name, dtype=object)
+    paulis, weights = data[::2].astype(str), data[1::2].astype(complex).real
+    print("len(weights)", len(weights))
+
+
+    # Pauli item "III...II" in list should correspond to energy offset
+    ind = -1
+    identity = "I" * len(paulis[0])
+    for i, p in enumerate(paulis):
+        if p == identity:
+            ind = i
+            break
+    if ind == -1:
+        offset = 0
+        obs = paulis
+        print("a")
+        w = weights
+    else:
+        print("b")
+        offset = weights[ind]
+        # erase the corresponding entry in paulis and weights
+        obs = np.delete(paulis, ind)
+        w = np.delete(weights, ind)
+        assert len(obs) == len(paulis) - 1, "Error in line eraser."
+        assert len(obs) == len(w), "Both arrays are not of equal length anymore."
+
+    # print some to console
+    if verbose:
+        print("Offset", "\t\t", offset)
+        for i, (p, we) in enumerate(zip(obs, w)):
+            print(p, "\t", we)
+            if i == 9:
+                print("\t", "...")
+                break
+
+    # convert string characters to integers
+    observables = np.array([[char_to_int[c] for c in o] for o in obs], dtype=int)
+    state = np.load(os.path.join(folder_hamiltonian, folder_name, "state_klocal_random_rho_n7.npy"))
+    # state = np.load(f"AlgeState/PauliAlgebraDensityState1.npy")
+
+    # state = np.load("422_density_matrix_part.npy")
+    init_obs = np.load(os.path.join(folder_hamiltonian, folder_name, f"{base_name}.npy"))
+    # init_obs = np.load("422_stabilizer_density_matrix_part.npy")
+    E_numerics = np.trace(init_obs @ state)
+
+    return observables, w, offset, E_numerics, state
+
+
+def load_pauli_list5(folder_hamiltonian, molecule_name, basis_name, encoding, verbose=False, sparse=False,
+                     diagonalize=True):
+    basis_matcher = {"sto3g": "STO3g", "6-31g": "6-31G"}
+    basis_name = "sto3g"
+    basis_name = basis_matcher[basis_name]
+
+    len_name = len(molecule_name) + len(basis_name) + 1  # for underscore char in naming scheme
+
+    available_folders = os.listdir(folder_hamiltonian)
+    # txt文件
+    folder_name = "H2O"
+
+    base_name = "hamiltonian_H2O_sto3g_14"
+    file_name = f"{base_name}_pauli.txt"
+
+    # extract Pauli list from file
+    full_file_name = os.path.join(folder_hamiltonian, folder_name, file_name)
+    data = np.loadtxt(full_file_name, dtype=object)
+    paulis, weights = data[::2].astype(str), data[1::2].astype(complex).real
+    print("len(weights)", len(weights))
+
+    # Pauli item "III...II" in list should correspond to energy offset
+    ind = -1
+    identity = "I" * len(paulis[0])
+    for i, p in enumerate(paulis):
+        if p == identity:
+            ind = i
+            break
+    if ind == -1:
+        offset = 0
+        obs = paulis
+        print("a")
+        w = weights
+    else:
+        print("b")
+        offset = weights[ind]
+        # erase the corresponding entry in paulis and weights
+        obs = np.delete(paulis, ind)
+        w = np.delete(weights, ind)
+        assert len(obs) == len(paulis) - 1, "Error in line eraser."
+        assert len(obs) == len(w), "Both arrays are not of equal length anymore."
+
+    # print some to console
+    if verbose:
+        print("Offset", "\t\t", offset)
+        for i, (p, we) in enumerate(zip(obs, w)):
+            print(p, "\t", we)
+            if i == 9:
+                print("\t", "...")
+                break
+
+    # convert string characters to integers
+    observables = np.array([[char_to_int[c] for c in o] for o in obs], dtype=int)
+    state = np.load(os.path.join(folder_hamiltonian, folder_name, "state_H2O_sto3g_14_vector.npy"))
+    # state = np.load(f"AlgeState/PauliAlgebraDensityState1.npy")
+
+    # state = np.load("422_density_matrix_part.npy")
+    init_obs = np.load(os.path.join(folder_hamiltonian, folder_name, f"{base_name}.npy"))
+    # init_obs = np.load("422_stabilizer_density_matrix_part.npy")
+    E_numerics = np.vdot(state, init_obs @ state)
+
+    return observables, w, offset, E_numerics, state
+
+def load_pauli_list1(folder_hamiltonian, molecule_name, basis_name, encoding, verbose=False, sparse=False,
+                    diagonalize=True, suiji=1, type = "dense"):
+    # match basis set naming scheme to saved files
+    basis_matcher = {"sto3g": "STO3g", "6-31g": "6-31G"}
+    basis_name = basis_matcher[basis_name]
+
+    len_name = len(molecule_name) + len(basis_name) + 1  # for underscore char in naming scheme
+
+    # open folder where the Hamiltonians of various encodings are stored
+    available_folders = os.listdir(folder_hamiltonian)
+    # folder_name = None
+    # for folder in available_folders:
+    #     if folder[:len_name] == molecule_name + "_" + basis_name:
+    #         folder_name = folder
+    # assert folder_name is not None, "File not found for molecule {} and basis set {}".format(molecule_name,basis_name)
+
+    # open file where the Hamiltonian of the specified encoding is stored
+    # available_files = os.listdir(folder_hamiltonian + folder_name)
+    # file_name = None
+    # file_energy = None
+    # for file in available_files:
+    #     if file[:2] == encoding[:2].lower() and file.find("grouped") == -1:
+    #         file_name = file
+    #     elif file == "ExactEnergy.txt":
+    #         file_energy = file
+    # assert file_name   is not None, "File not found for encoding {}".format(encoding)
+    # assert file_energy is not None, "File not found for ground-state energy."
+
+    folder_name = "hamil_class"
+    file_name = f"hamiltonian_{type}_{suiji}_pauli.txt"
+    # file_name = "stabilizer_422.txt"
+    # if diagonalize:
+    #     # read ground-state energy from file
+    #     full_file_name = os.path.join(folder_hamiltonian,folder_name,file_energy)
+    #     with open(full_file_name,"r") as f:
+    #         E_GS = float(f.readline().strip().split()[-1])
+    # else:
+    #     E_numerics = None
+    #     state = None
+
+    # extract Pauli list from file
+    full_file_name = os.path.join(folder_hamiltonian, folder_name, file_name)
+    data = np.loadtxt(full_file_name, dtype=object)
+    paulis, weights = data[::2].astype(str), data[1::2].astype(complex).real
+    print("len(weights)", len(weights))
+    # if diagonalize:
+    #     # use Pauli list to create Hamiltonian and diagonalize it afterwards to obtain ground-state
+    #     H = Hamiltonian(weights,paulis)
+    #     E_numerics, state = H.ground(sparse=sparse)
+    #     if abs(E_GS-E_numerics) >= 1e-6:
+    #         print("Warning: Recorded value for the energy deviates significantly from numerical estimate!")
+    #         print("Recorded:",E_GS)
+    #         print("Calculated:",E_numerics)
+
+    # Pauli item "III...II" in list should correspond to energy offset
+    ind = -1
+    identity = "I" * len(paulis[0])
+    for i, p in enumerate(paulis):
+        if p == identity:
+            ind = i
+            break
+    if ind == -1:
+        offset = 0
+        obs = paulis
+        print("a")
+        w = weights
+    else:
+        print("b")
+        offset = weights[ind]
+        # erase the corresponding entry in paulis and weights
+        obs = np.delete(paulis, ind)
+        w = np.delete(weights, ind)
+        assert len(obs) == len(paulis) - 1, "Error in line eraser."
+        assert len(obs) == len(w), "Both arrays are not of equal length anymore."
+
+    # print some to console
+    if verbose:
+        print("Offset", "\t\t", offset)
+        for i, (p, we) in enumerate(zip(obs, w)):
+            print(p, "\t", we)
+            if i == 9:
+                print("\t", "...")
+                break
+
+    # convert string characters to integers
+    observables = np.array([[char_to_int[c] for c in o] for o in obs], dtype=int)
+    # state = np.load(f"haozhaowu/H2/ground_state_H2_{suiji}_sto-3g_density_matrix.npy")
+    state = np.load(f"haozhaowu/random/hamil_class/state_{type}_rho_{suiji}.npy")
+    # state = np.load("422_density_matrix_part.npy")
+    # init_obs = np.load(f"haozhaowu/H2/H2_{suiji}_sto-3g.npy")
+    init_obs = np.load(f"haozhaowu/random/hamil_class/hamiltonian_{type}_{suiji}.npy")
+    E_numerics = np.trace(init_obs @ state)
+
+    return observables, w, offset, E_numerics, state
+
+def load_pauli_list2(folder_hamiltonian, molecule_name, basis_name, encoding, verbose=False, sparse=False,
+                    diagonalize=True, suiji=1, type = "heisenberg"):
+    # match basis set naming scheme to saved files
+    basis_matcher = {"sto3g": "STO3g", "6-31g": "6-31G"}
+    basis_name = basis_matcher[basis_name]
+
+    len_name = len(molecule_name) + len(basis_name) + 1  # for underscore char in naming scheme
+
+    # open folder where the Hamiltonians of various encodings are stored
+    available_folders = os.listdir(folder_hamiltonian)
+    # folder_name = None
+    # for folder in available_folders:
+    #     if folder[:len_name] == molecule_name + "_" + basis_name:
+    #         folder_name = folder
+    # assert folder_name is not None, "File not found for molecule {} and basis set {}".format(molecule_name,basis_name)
+
+    # open file where the Hamiltonian of the specified encoding is stored
+    # available_files = os.listdir(folder_hamiltonian + folder_name)
+    # file_name = None
+    # file_energy = None
+    # for file in available_files:
+    #     if file[:2] == encoding[:2].lower() and file.find("grouped") == -1:
+    #         file_name = file
+    #     elif file == "ExactEnergy.txt":
+    #         file_energy = file
+    # assert file_name   is not None, "File not found for encoding {}".format(encoding)
+    # assert file_energy is not None, "File not found for ground-state energy."
+
+    folder_name = "heisenberg/hamil_class"
+    file_name = f"hamiltonian_{type}_{suiji}_pauli.txt"
+    # file_name = "stabilizer_422.txt"
+    # if diagonalize:
+    #     # read ground-state energy from file
+    #     full_file_name = os.path.join(folder_hamiltonian,folder_name,file_energy)
+    #     with open(full_file_name,"r") as f:
+    #         E_GS = float(f.readline().strip().split()[-1])
+    # else:
+    #     E_numerics = None
+    #     state = None
+
+    # extract Pauli list from file
+    full_file_name = os.path.join(folder_hamiltonian, folder_name, file_name)
+    data = np.loadtxt(full_file_name, dtype=object)
+    paulis, weights = data[::2].astype(str), data[1::2].astype(complex).real
+    print("len(weights)", len(weights))
+    # if diagonalize:
+    #     # use Pauli list to create Hamiltonian and diagonalize it afterwards to obtain ground-state
+    #     H = Hamiltonian(weights,paulis)
+    #     E_numerics, state = H.ground(sparse=sparse)
+    #     if abs(E_GS-E_numerics) >= 1e-6:
+    #         print("Warning: Recorded value for the energy deviates significantly from numerical estimate!")
+    #         print("Recorded:",E_GS)
+    #         print("Calculated:",E_numerics)
+
+    # Pauli item "III...II" in list should correspond to energy offset
+    ind = -1
+    identity = "I" * len(paulis[0])
+    for i, p in enumerate(paulis):
+        if p == identity:
+            ind = i
+            break
+    if ind == -1:
+        offset = 0
+        obs = paulis
+        print("a")
+        w = weights
+    else:
+        print("b")
+        offset = weights[ind]
+        # erase the corresponding entry in paulis and weights
+        obs = np.delete(paulis, ind)
+        w = np.delete(weights, ind)
+        assert len(obs) == len(paulis) - 1, "Error in line eraser."
+        assert len(obs) == len(w), "Both arrays are not of equal length anymore."
+
+    # print some to console
+    if verbose:
+        print("Offset", "\t\t", offset)
+        for i, (p, we) in enumerate(zip(obs, w)):
+            print(p, "\t", we)
+            if i == 9:
+                print("\t", "...")
+                break
+
+    # convert string characters to integers
+    observables = np.array([[char_to_int[c] for c in o] for o in obs], dtype=int)
+    # state = np.load(f"haozhaowu/H2/ground_state_H2_{suiji}_sto-3g_density_matrix.npy")
+    # state = np.load(f"haozhaowu/random/hamil_class/state_{type}_rho_{suiji}.npy")
+    state = np.load(f"haozhaowu/heisenberg/hamil_class/state_{type}_rho_{suiji}.npy")
+
+    # state = np.load("422_density_matrix_part.npy")
+    # init_obs = np.load(f"haozhaowu/H2/H2_{suiji}_sto-3g.npy")
+    init_obs = np.load(f"haozhaowu/heisenberg/hamil_class/hamiltonian_{type}_{suiji}.npy")
+    E_numerics = np.trace(init_obs @ state)
+
     return observables, w, offset, E_numerics, state
 
 def load_thermal_state(beta,folder_hamiltonian,molecule_name,basis_name,encoding,verbose=False):

@@ -1,6 +1,7 @@
 import numpy as np
 from itertools import product
 from time import time
+from typing import Optional
 
 ##########################################################################################
 ### Helper functions #####################################################################
@@ -12,6 +13,30 @@ def hit_by(O,P):
             return False
     return True
 
+def pauli_commute(O0, O1):
+    """Returns whether two Pauli strings commute globally."""
+    anti_count = 0
+    for a, b in zip(O0, O1):
+        if a == 0 or b == 0 or a == b:
+            continue
+        anti_count += 1
+    return anti_count % 2 == 0
+
+def qwc_compatible(O0, O1):
+    """Returns whether two Pauli strings are qubit-wise commuting (QWC)."""
+    for a, b in zip(O0, O1):
+        if not (a == 0 or b == 0 or a == b):
+            return False
+    return True
+
+def hit_by_mode(O, P, commutation_mode="qwc"):
+    """Returns whether observable O is considered hit by setting P under the selected mode."""
+    if commutation_mode == "qwc":
+        return hit_by(O, P)
+    if commutation_mode == "fc":
+        return pauli_commute(O, P)
+    raise ValueError("Unknown commutation_mode '{}'. Use 'qwc' or 'fc'.".format(commutation_mode))
+
 def setting_to_str(arr):
     out = ""
     for a in np.array(arr).flatten():
@@ -20,6 +45,169 @@ def setting_to_str(arr):
 
 # equation 6 from manuscript
 N_delta = lambda delta: 4*(2*np.sqrt(-np.log(delta))+1)**2
+
+def _pauli_single_matrix(ind):
+    if ind == 0:
+        return np.array([[1, 0], [0, 1]], dtype=complex)
+    if ind == 1:
+        return np.array([[0, 1], [1, 0]], dtype=complex)
+    if ind == 2:
+        return np.array([[0, -1j], [1j, 0]], dtype=complex)
+    if ind == 3:
+        return np.array([[1, 0], [0, -1]], dtype=complex)
+    raise ValueError("Unknown Pauli index {}".format(ind))
+
+def pauli_row_to_matrix(row):
+    mat = np.array([[1]], dtype=complex)
+    for ind in row:
+        mat = np.kron(mat, _pauli_single_matrix(int(ind)))
+    return mat
+
+def build_commuting_groups(observables, commutation_mode="qwc", max_support_qubits=None):
+    """Build commuting groups via greedy coloring on the non-commutation graph.
+
+    If max_support_qubits is set (int), additionally enforce that the union support
+    (non-identity qubits) of observables within a group does not exceed this limit.
+    This is critical for FC "joint measurement" implementations that rely on explicitly
+    constructing 2^k x 2^k unitaries (memory blows up quickly with k).
+    """
+    if commutation_mode not in ("qwc", "fc"):
+        raise ValueError("commutation_mode has to be either 'qwc' or 'fc'.")
+    n = len(observables)
+    neighbors = [set() for _ in range(n)]
+    for i in range(n):
+        oi = observables[i]
+        for j in range(i + 1, n):
+            compatible = qwc_compatible(oi, observables[j]) if commutation_mode == "qwc" else pauli_commute(oi, observables[j])
+            if not compatible:
+                neighbors[i].add(j)
+                neighbors[j].add(i)
+
+    order = sorted(range(n), key=lambda idx: len(neighbors[idx]), reverse=True)
+    colors = [-1] * n
+    for idx in order:
+        used = {colors[nn] for nn in neighbors[idx] if colors[nn] >= 0}
+        color = 0
+        while color in used:
+            color += 1
+        colors[idx] = color
+
+    num_colors = max(colors) + 1 if colors else 0
+    groups = [[] for _ in range(num_colors)]
+    for obs_idx, color in enumerate(colors):
+        groups[color].append(obs_idx)
+
+    groups = [np.array(g, dtype=int) for g in groups if len(g) > 0]
+
+    if max_support_qubits is None:
+        return groups
+
+    max_support_qubits = int(max_support_qubits)
+    if max_support_qubits <= 0:
+        raise ValueError("max_support_qubits must be a positive integer.")
+
+    # Post-process: split any group whose union support exceeds max_support_qubits.
+    split_groups = []
+    for g in groups:
+        # Greedy bin packing within the group preserving commutation.
+        bins = []
+        bin_supports = []
+        for idx in g:
+            o = observables[int(idx)]
+            o_support = set(np.where(o != 0)[0].tolist())
+            placed = False
+            for b_i in range(len(bins)):
+                # check union support size constraint
+                if len(bin_supports[b_i] | o_support) > max_support_qubits:
+                    continue
+                # check commutation within bin
+                ok = True
+                for jdx in bins[b_i]:
+                    compatible = (
+                        qwc_compatible(o, observables[int(jdx)])
+                        if commutation_mode == "qwc"
+                        else pauli_commute(o, observables[int(jdx)])
+                    )
+                    if not compatible:
+                        ok = False
+                        break
+                if ok:
+                    bins[b_i].append(int(idx))
+                    bin_supports[b_i] |= o_support
+                    placed = True
+                    break
+            if not placed:
+                bins.append([int(idx)])
+                bin_supports.append(set(o_support))
+        for b in bins:
+            split_groups.append(np.array(b, dtype=int))
+
+    return split_groups
+
+def build_fc_group_plans(observables, groups, max_support_qubits=None):
+    """Build per-group basis-change plans for FC grouped measurement."""
+    plans = {}
+    for gid, group in enumerate(groups):
+        obs_indices = np.array(group, dtype=int)
+        support_mask = np.any(observables[obs_indices] != 0, axis=0)
+        qubits = np.where(support_mask)[0]
+
+        if max_support_qubits is not None and len(qubits) > int(max_support_qubits):
+            raise MemoryError(
+                "FC group {} spans {} qubits, exceeding max_support_qubits={}."
+                " Reduce group support size or change joint-measurement implementation.".format(
+                    gid, len(qubits), int(max_support_qubits)
+                )
+            )
+
+        if len(qubits) == 0:
+            plans[gid] = {
+                "group_id": gid,
+                "obs_indices": obs_indices,
+                "qubits": np.array([], dtype=int),
+                "unitary": np.array([[1]], dtype=complex),
+                "eigenvalues": np.ones((len(obs_indices), 1), dtype=int),
+            }
+            continue
+
+        pauli_mats = [pauli_row_to_matrix(observables[idx][qubits]) for idx in obs_indices]
+        basis = None
+        for trial in range(8):
+            coeffs = np.array([np.cos((k + 1) * (trial + 1)) for k in range(len(pauli_mats))], dtype=float)
+            H = np.zeros_like(pauli_mats[0], dtype=complex)
+            for c, mat in zip(coeffs, pauli_mats):
+                H += c * mat
+            _, vecs = np.linalg.eigh(H)
+
+            ok = True
+            for mat in pauli_mats:
+                d = vecs.conj().T @ mat @ vecs
+                off = d - np.diag(np.diag(d))
+                if np.max(np.abs(off)) > 1e-7:
+                    ok = False
+                    break
+            if ok:
+                basis = vecs
+                break
+
+        if basis is None:
+            basis = np.eye(pauli_mats[0].shape[0], dtype=complex)
+
+        eigenvalues = []
+        for mat in pauli_mats:
+            d = basis.conj().T @ mat @ basis
+            vals = np.real(np.diag(d))
+            vals = np.where(vals >= 0, 1, -1).astype(int)
+            eigenvalues.append(vals)
+
+        plans[gid] = {
+            "group_id": gid,
+            "obs_indices": obs_indices,
+            "qubits": qubits.astype(int),
+            "unitary": basis.conj().T,
+            "eigenvalues": np.array(eigenvalues, dtype=int),
+        }
+    return plans
 
 ##########################################################################################
 ### Measurement schemes used for benchmark ###############################################
@@ -85,8 +273,12 @@ class Measurement_scheme:
         self.scheme_params = {"eps": epsilon, "num_obs": M}
         self.N_hits        = np.zeros(M,dtype=int)
         self.is_adaptive   = False # useful default to be given to any child class
+        self.commutation_mode = "qwc"
         
         return
+
+    def is_hit(self, observable, setting):
+        return hit_by_mode(observable, setting, self.commutation_mode)
         
     def find_setting(self):
         pass
@@ -178,16 +370,48 @@ class Shadow_Grouping(Measurement_scheme):
         Returns p and a dictionary info holding further details on the matching procedure.
     """
     
-    def __init__(self,observables,weights,epsilon,weight_function):
+    def __init__(
+        self,
+        observables,
+        weights,
+        epsilon,
+        weight_function,
+        commutation_mode="qwc",
+        max_support_qubits: Optional[int] = 8,
+    ):
         super().__init__(observables,weights,epsilon)
+        if commutation_mode not in ("qwc", "fc"):
+            raise ValueError("commutation_mode has to be either 'qwc' or 'fc'.")
+        self.commutation_mode = commutation_mode
+        self.max_support_qubits = max_support_qubits
         self.N_hits = np.zeros_like(self.N_hits)
         self.weight_function = weight_function
+        self.groups_fc = None
+        self.group_plans = None
+        if self.commutation_mode == "fc":
+            self.groups_fc = self._build_fc_groups()
+            self.group_plans = self._build_fc_group_plans()
         if self.weight_function is not None:
             test = self.weight_function(self.w,self.eps,self.N_hits)
             assert len(test) == len(self.w), "Weight function is supposed to return an array of shape {} (i.e. number of observables) but returned an array of shape {}".format(self.w.shape,test.shape)
         self.is_sampling = False
         return
-    
+
+    def _build_fc_groups(self):
+        return build_commuting_groups(
+            self.obs, commutation_mode="fc", max_support_qubits=self.max_support_qubits
+        )
+
+    def _build_fc_group_plans(self):
+        return build_fc_group_plans(
+            self.obs, self.groups_fc, max_support_qubits=self.max_support_qubits
+        )
+
+    def get_group_plan(self, group_id):
+        if self.group_plans is None:
+            return None
+        return self.group_plans[int(group_id)]
+
     def reset(self):
         self.N_hits = np.zeros_like(self.N_hits)
         return
@@ -213,24 +437,39 @@ class Shadow_Grouping(Measurement_scheme):
         if verbose:
             print("Checking list of observables.")
         tstart = time()
-        for idx in reversed(order):
-            o = self.obs[idx]
-            if verbose:
-                print("Checking",o)
-            if hit_by(o,setting):
-                non_id = o!=0
-                # overwrite those qubits that fall in the support of o
-                setting[non_id] = o[non_id]
+        chosen_gid = None
+        chosen_group = None
+        if self.commutation_mode == "qwc":
+            for idx in reversed(order):
+                o = self.obs[idx]
                 if verbose:
-                    print("p =",setting)
-                # break sequence is case all identities in setting are exhausted
-                if np.min(setting) > 0:
-                    break
+                    print("Checking",o)
+                if hit_by(o,setting):
+                    non_id = o!=0
+                    # overwrite those qubits that fall in the support of o
+                    setting[non_id] = o[non_id]
+                    if verbose:
+                        print("p =",setting)
+                    # break sequence is case all identities in setting are exhausted
+                    if np.min(setting) > 0:
+                        break
+        else:
+            # FC mode: select a globally-commuting group and perform joint measurement (handled by Energy_estimator).
+            group_scores = np.array([np.sum(weights[g]) for g in self.groups_fc], dtype=float)
+            chosen_gid = int(np.argmax(group_scores))
+            chosen_group = self.groups_fc[chosen_gid]
+            rep_local_idx = int(np.argmax(weights[chosen_group]))
+            best_idx = int(chosen_group[rep_local_idx])
+            setting = self.obs[best_idx].copy()
                     
         tend = time()
 
         # update number of hits
-        is_hit = np.array([hit_by(o,setting) for o in self.obs],dtype=bool)
+        if self.commutation_mode == "fc":
+            is_hit = np.zeros(self.num_obs, dtype=bool)
+            is_hit[chosen_group] = True
+        else:
+            is_hit = np.array([self.is_hit(o,setting) for o in self.obs],dtype=bool)
         self.N_hits += is_hit
         
         # further info for comparisons
@@ -239,6 +478,9 @@ class Shadow_Grouping(Measurement_scheme):
         info["inconfidence_bound"] = self.get_inconfidence_bound()
         info["Bernstein bound"] = self.get_Bernstein_bound()
         info["run_time"] = tend - tstart
+        if self.commutation_mode == "fc":
+            info["group_id"] = chosen_gid
+            info["group_size"] = len(chosen_group)
         if verbose:
             print("Finished assigning with total weight of",info["total_weight"])
         return setting, info
@@ -251,8 +493,8 @@ class Brute_force_matching(Shadow_Grouping):
         Returns p and a dictionary info holding further details on the matching procedure.
     """
     
-    def __init__(self,observables,weights,epsilon,target="Bernstein_bound"):
-        super().__init__(observables,weights,epsilon,None)
+    def __init__(self,observables,weights,epsilon,target="Bernstein_bound",commutation_mode="qwc"):
+        super().__init__(observables,weights,epsilon,None,commutation_mode=commutation_mode)
         if isinstance(target,str):
             self.target_is_member_function = True
             try:
@@ -273,7 +515,7 @@ class Brute_force_matching(Shadow_Grouping):
             print("Brute-force searching all measurement settings")
         tstart = time()
         for P in product(range(1,4),repeat=self.num_qubits):
-            temp_hit = np.array([hit_by(o,P) for o in self.obs])
+            temp_hit = np.array([self.is_hit(o,P) for o in self.obs])
             self.N_hits += temp_hit
             temp = self.weights() if self.target_is_member_function else np.sum(self.weights(self.w,self.eps,self.N_hits))
             self.N_hits -= temp_hit
@@ -293,7 +535,7 @@ class Brute_force_matching(Shadow_Grouping):
             setting = best_setting[np.random.choice(n)]
             
         # update number of hits
-        is_hit = np.array([hit_by(o,setting) for o in self.obs],dtype=bool)
+        is_hit = np.array([self.is_hit(o,setting) for o in self.obs],dtype=bool)
         self.N_hits += is_hit
         
         info = {"best_settings":      best_setting,
@@ -315,7 +557,7 @@ class AdaptiveShadows(Shadow_Grouping):
     """
     
     def __init__(self,observables,weights,epsilon=0.1):
-        super().__init__(observables,weights,epsilon,None)
+        super().__init__(observables,weights,epsilon,None,commutation_mode="qwc")
         self.is_sampling = True
         return
     
@@ -380,7 +622,7 @@ class AdaptiveShadows(Shadow_Grouping):
         tend = time()
             
         # update number of hits
-        is_hit = np.array([hit_by(o,setting) for o in self.obs],dtype=bool)
+        is_hit = np.array([self.is_hit(o,setting) for o in self.obs],dtype=bool)
         self.N_hits += is_hit
         
         info = {"inconfidence_bound": self.get_inconfidence_bound(),
@@ -399,10 +641,36 @@ class SettingSampler(Measurement_scheme):
         Returns p and a dictionary info holding further details on the matching procedure.
         Note that due to the sampling, find_setting() can yield multiple settings.
     """
-    def __init__(self,observables,weights,filename_for_distribution,epsilon=0.1):
+    def __init__(
+        self,
+        observables,
+        weights,
+        filename_for_distribution,
+        epsilon=0.1,
+        commutation_mode="qwc",
+        max_support_qubits: Optional[int] = 8,
+    ):
         super().__init__(observables,weights,epsilon)
+        if commutation_mode not in ("qwc", "fc"):
+            raise ValueError("commutation_mode has to be either 'qwc' or 'fc'.")
+        self.commutation_mode = commutation_mode
+        self.max_support_qubits = max_support_qubits
         self.N_hits = np.zeros_like(self.N_hits)
-        self.load_distribution_setting(filename_for_distribution)
+        self.groups_fc = None
+        self.group_plans = None
+        if self.commutation_mode == "fc":
+            # FC mode expects a distribution over *commuting groups* (overlapped groups in OGM spirit).
+            # If the provided file is in FC-group format, load it; otherwise, fall back to an internal heuristic.
+            loaded = False
+            if filename_for_distribution is not None:
+                try:
+                    loaded = self.load_fc_group_distribution(filename_for_distribution)
+                except Exception:
+                    loaded = False
+            if not loaded:
+                self._load_distribution_from_fc_groups()
+        else:
+            self.load_distribution_setting(filename_for_distribution)
         self.is_sampling = True
         return
     
@@ -421,20 +689,208 @@ class SettingSampler(Measurement_scheme):
         self.settings = data[:-1].T
         return
 
+    def load_fc_group_distribution(self, filename):
+        """Load a probability distribution over *commuting groups* for FC joint measurement.
+
+        Expected text format (whitespace separated), with optional comment lines starting with '#':
+
+        - One group per line:  p_g  idx_0  idx_1  idx_2  ...
+          where idx_k are observable indices (0-based) belonging to the same mutually commuting group.
+
+        Example:
+            # p_g  obs_indices...
+            0.12  0  5  9
+            0.08  1  7
+            ...
+
+        Returns True if at least one group was loaded.
+        """
+        lines = []
+        with open(filename, "r") as f:
+            for raw in f:
+                s = raw.strip()
+                if not s or s.startswith("#"):
+                    continue
+                lines.append(s)
+
+        groups = []
+        probs = []
+        for s in lines:
+            parts = s.split()
+            if len(parts) < 2:
+                continue
+            p = float(parts[0])
+            idx = np.array([int(x) for x in parts[1:]], dtype=int)
+            if len(idx) == 0:
+                continue
+            probs.append(p)
+            groups.append(idx)
+
+        if len(groups) == 0:
+            return False
+
+        probs = np.array(probs, dtype=float)
+        probs = np.maximum(probs, 0.0)
+        total = np.sum(probs)
+        if total <= 0:
+            probs = np.ones(len(probs), dtype=float) / len(probs)
+        else:
+            probs = probs / total
+
+        self.groups_fc = groups
+        self.group_plans = build_fc_group_plans(self.obs, self.groups_fc)
+
+        # Provide representative Pauli strings (one per group) for bookkeeping/logging.
+        reps = []
+        for g in self.groups_fc:
+            rep_local = int(np.argmax(np.abs(self.w[g])))
+            rep_idx = int(g[rep_local])
+            reps.append(self.obs[rep_idx].copy())
+        self.settings = np.array(reps, dtype=int)
+        self.p = probs
+        return True
+
+    def _load_distribution_from_fc_groups(self):
+        """FC mode: ignore external grouping and rebuild groups from current Hamiltonian."""
+        self.groups_fc = build_commuting_groups(
+            self.obs, commutation_mode="fc", max_support_qubits=self.max_support_qubits
+        )
+        self.group_plans = build_fc_group_plans(
+            self.obs, self.groups_fc, max_support_qubits=self.max_support_qubits
+        )
+
+        reps = []
+        probs = []
+        for g in self.groups_fc:
+            rep_local = int(np.argmax(np.abs(self.w[g])))
+            rep_idx = int(g[rep_local])
+            reps.append(self.obs[rep_idx].copy())
+            probs.append(np.sum(np.abs(self.w[g])))
+
+        self.settings = np.array(reps, dtype=int)
+        probs = np.array(probs, dtype=float)
+        total = np.sum(probs)
+        if total <= 0:
+            self.p = np.ones(len(probs), dtype=float) / len(probs)
+        else:
+            self.p = probs / total
+
+    def get_group_plan(self, group_id):
+        if self.group_plans is None:
+            return None
+        return self.group_plans[int(group_id)]
+
     def find_setting(self,N_samples=1):
         """ Generate settings from the given distribution p. Can find multiple settings at once by providing a value for
             N_samples (int). Returns the setting(s) and a dictionary holding the information about the number of settings sampled.
         """
+        # print("self.p", self.p)
+        # print("Sum of probabilities:", np.sum(self.p))  # 检查总和是否合理
+        self.p = np.maximum(self.p, 0)  # 将所有负值置为 0
+        self.p = self.p / np.sum(self.p)  # 重新归一化
+        # print("self.p", self.p)
+        # print("Sum of probabilities:", np.sum(self.p))  # 检查总和是否合理
+
         inds = np.random.choice(len(self.p),size=(N_samples,),p=self.p)
         Q = self.settings[inds]
         for ind, repeats in zip(*np.unique(inds,return_counts=True)):
             # update number of hits for each of the unique elements in Q
             # by counting over the index vector, instead
-            is_hit = np.array([hit_by(o,self.settings[ind]) for o in self.obs],dtype=int)
+            if self.commutation_mode == "fc" and self.groups_fc is not None:
+                is_hit = np.zeros(self.num_obs, dtype=int)
+                is_hit[self.groups_fc[int(ind)]] = 1
+            else:
+                is_hit = np.array([self.is_hit(o,self.settings[ind]) for o in self.obs],dtype=int)
             self.N_hits += is_hit*repeats
         if N_samples==1:
             Q = Q.flatten()
+            if self.commutation_mode == "fc" and self.groups_fc is not None:
+                return Q, {"N_samples": N_samples, "group_id": int(inds[0]), "group_size": len(self.groups_fc[int(inds[0])])}
+        if self.commutation_mode == "fc" and self.groups_fc is not None:
+            return Q, {"N_samples": N_samples, "group_ids": inds}
         return Q, {"N_samples": N_samples}
+
+class GraphColoringGrouping(Measurement_scheme):
+    """Static grouping method via greedy graph coloring.
+
+    Supports both QWC and full-commuting (FC) grouping criteria.
+    """
+
+    def __init__(self, observables, weights, epsilon=0.1, weighted_sampling=True, commutation_mode="qwc"):
+        super().__init__(observables, weights, epsilon)
+        if commutation_mode not in ("qwc", "fc"):
+            raise ValueError("commutation_mode has to be either 'qwc' or 'fc'.")
+        self.commutation_mode = commutation_mode
+        self.weighted_sampling = weighted_sampling
+        self.groups = self._build_groups()
+        self.group_settings = np.array([self._group_to_setting(g) for g in self.groups], dtype=int)
+        self.group_weights = np.array([np.sum(np.abs(self.w[g])) for g in self.groups], dtype=float)
+        total = np.sum(self.group_weights)
+        if total <= 0:
+            self.group_prob = np.ones(len(self.groups), dtype=float) / len(self.groups)
+        else:
+            self.group_prob = self.group_weights / total
+        self.is_sampling = True
+
+    def reset(self):
+        self.N_hits = np.zeros_like(self.N_hits)
+
+    def _compatible(self, o0, o1):
+        if self.commutation_mode == "qwc":
+            return qwc_compatible(o0, o1)
+        return pauli_commute(o0, o1)
+
+    def _build_groups(self):
+        n = self.num_obs
+        neighbors = [set() for _ in range(n)]
+        for i in range(n):
+            oi = self.obs[i]
+            for j in range(i + 1, n):
+                if not self._compatible(oi, self.obs[j]):
+                    neighbors[i].add(j)
+                    neighbors[j].add(i)
+
+        order = sorted(range(n), key=lambda idx: len(neighbors[idx]), reverse=True)
+        colors = [-1] * n
+        for idx in order:
+            used = {colors[nn] for nn in neighbors[idx] if colors[nn] >= 0}
+            color = 0
+            while color in used:
+                color += 1
+            colors[idx] = color
+
+        num_colors = max(colors) + 1 if colors else 0
+        groups = [[] for _ in range(num_colors)]
+        for obs_idx, color in enumerate(colors):
+            groups[color].append(obs_idx)
+        return [np.array(g, dtype=int) for g in groups]
+
+    def _group_to_setting(self, group):
+        setting = np.zeros(self.num_qubits, dtype=int)
+        for idx in group:
+            o = self.obs[idx]
+            mask = o != 0
+            setting[mask] = o[mask]
+        return setting
+
+    def find_setting(self, N_samples=1):
+        if N_samples < 1:
+            raise ValueError("N_samples has to be >= 1")
+
+        if self.weighted_sampling:
+            picked = np.random.choice(len(self.groups), size=(N_samples,), p=self.group_prob)
+        else:
+            picked = np.random.choice(len(self.groups), size=(N_samples,))
+
+        settings = self.group_settings[picked]
+        for gid, repeats in zip(*np.unique(picked, return_counts=True)):
+            setting = self.group_settings[gid]
+            is_hit = np.array([self.is_hit(o, setting) for o in self.obs], dtype=int)
+            self.N_hits += is_hit * repeats
+
+        if N_samples == 1:
+            return settings.flatten(), {"group_id": int(picked[0]), "num_groups": len(self.groups)}
+        return settings, {"group_ids": picked, "num_groups": len(self.groups)}
     
 class Derandomization(Shadow_Grouping):
     
@@ -444,8 +900,10 @@ class Derandomization(Shadow_Grouping):
         If use_one_norm, implements a 1-norm weighting to the bound as proposed in the paper.
     """
 
-    def __init__(self,observables,weights,epsilon,delta=0,num_measurements=None,use_one_norm=False):
-        super().__init__(observables,weights,epsilon,None)
+    def __init__(self,observables,weights,epsilon,delta=0,num_measurements=None,use_one_norm=False,commutation_mode="qwc"):
+        if commutation_mode not in ("qwc", "fc"):
+            raise ValueError("commutation_mode has to be either 'qwc' or 'fc'.")
+        super().__init__(observables,weights,epsilon,None,commutation_mode=commutation_mode)
         
         self.num_measurements = num_measurements
         # (n x M) integer array with entries in {0,1,2,3} == {E,X,Y,Z}
@@ -472,6 +930,8 @@ class Derandomization(Shadow_Grouping):
         self.assignments = [] # for the next measurement setting
         self.m_k_counter = [0,0] # convenience internal counter = (num_settings so far, current qubit pos)
         self.last_assignment = None
+        if self.commutation_mode == "fc":
+            self.group_plans = None
         self.is_sampling = False
         return
     
@@ -495,7 +955,7 @@ class Derandomization(Shadow_Grouping):
             self.m_k_counter = [self.m_k_counter[0]+1, 0]
             # start new measurement setting and check whether the previous setting hits any observables
             self.last_assignment = self.assignments.copy()
-            increment = np.array([hit_by(self.obs[i],self.last_assignment) for i in range(self.num_obs)],dtype=int)
+            increment = np.array([self.is_hit(self.obs[i],self.last_assignment) for i in range(self.num_obs)],dtype=int)
             self.N_hits += increment
             self.assignments = []
         else:
@@ -526,7 +986,7 @@ class Derandomization(Shadow_Grouping):
         p = self.assignments
         temp = self.nu/(3**self.localities[qubit_k])
         # calculate product of the second term for the first k qubit operators
-        sign = np.array([hit_by(o[:qubit_k],p) for o in self.obs])
+        sign = np.array([hit_by_mode(o[:qubit_k],p,self.commutation_mode) for o in self.obs])
         temp = np.log(1-temp*sign) # element-wise operations
         # first term for every observable
         if self.use_one_norm:

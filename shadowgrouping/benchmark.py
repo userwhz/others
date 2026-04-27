@@ -65,29 +65,43 @@ def load_settings(filename,estimator,N=None):
     assert len(list(data.keys())[0]) == estimator.measurement_scheme.num_qubits, "Loaded settings correspond to a different qubit number."
     for setting,reps in data.items():
         setting = [char_to_int[c] for c in setting]
-        is_hit = [hit_by(o,setting) for o in estimator.measurement_scheme.obs]
+        is_hit = [estimator.measurement_scheme.is_hit(o,setting) for o in estimator.measurement_scheme.obs]
         estimator.measurement_scheme.N_hits[is_hit] += reps
     return estimator
 
-def track_method_epsilon(estimator,E_GS,delta,benchmark_params={"Nshots":1000, "Nreps": 100, "Nsteps": 10, "truncate": False, "Nstart": None, "settings_filename": None,"load_at": None}):
+def track_method_epsilon(estimator,E_GS,delta,benchmark_params={"Nshots":1000, "Nreps": 100, "Nsteps": 10, "truncate": False, "Nstart": None, "settings_filename": None,"load_at": None}, label = ""):
     assert isinstance(benchmark_params,dict) or benchmark_params is None, "benchmark_params have to be either None or a dictionary."
     if benchmark_params is None:
         benchmark_params = {}
     # preprocessing of benchmark params
-    Nshots        = max(1,benchmark_params.get("Nshots",10000))
-    Nreps         = max(1,benchmark_params.get("Nreps",100))
-    Nsteps        = max(2,benchmark_params.get("Nsteps",40))
-    Nstart        = max(N_delta(delta),benchmark_params.get("Nstart",10))
-    filename      = benchmark_params.get("settings_filename",None)
+    Nshots = max(1,benchmark_params.get("Nshots",10000))
+    Nreps = max(1,benchmark_params.get("Nreps",100))
+    Nsteps = max(2,benchmark_params.get("Nsteps",40))
+    Nstart = max(N_delta(delta),benchmark_params.get("Nstart",10))
+    filename = benchmark_params.get("settings_filename",None)
     assert isinstance(filename,str) or filename is None, "settings_filename has to be either None or str."
-    load_at_N     = benchmark_params.get("load_at", None) if filename is not None else None
+    load_at_N = benchmark_params.get("load_at", None) if filename is not None else None
     if load_at_N is not None:
         assert load_at_N < Nstart, "Loading point has been set equal to or after starting point of tracking."
-    save_dicts    = filename is not None
-    truncate      = benchmark_params.get("truncate", False)
-    use_naive     = benchmark_params.get("use_naive", False)
-    N_steps       = np.unique(np.round(np.logspace(np.log10(Nstart),np.log10(Nshots),Nsteps),0)).astype(int)
-    
+    save_dicts = filename is not None
+    truncate = benchmark_params.get("truncate", False)
+    use_naive = benchmark_params.get("use_naive", False)
+    N_steps = np.unique(np.round(np.logspace(np.log10(Nstart),np.log10(Nshots),Nsteps),0)).astype(int)
+
+
+
+    Nshots = 2038
+    Nreps = 20
+    # N_steps = [12, 45, 160, 572, 2038, 7256, 25848]
+    N_steps = [ 572, 2038, 3845,7256, 13695,25848]
+    # N_steps = [1000, 3000, 7000, 15000, 35000, 65000, 100000]
+
+
+
+    # Nshots = 2038
+    # Nreps = 1
+    # N_steps = [2038]
+
     N_current = 0
     eps_provable = np.zeros(len(N_steps))
     eps_empirical = np.zeros_like(eps_provable)
@@ -96,6 +110,7 @@ def track_method_epsilon(estimator,E_GS,delta,benchmark_params={"Nshots":1000, "
     energies = np.zeros((Nreps,len(N_steps)))
     saved_settings = {}
     if estimator.measurement_scheme.is_sampling:
+        print("Sampling...")
         # allocate and measure in one go, then repeat this process
         for j in range(Nreps):
             estimator.reset()
@@ -120,6 +135,14 @@ def track_method_epsilon(estimator,E_GS,delta,benchmark_params={"Nshots":1000, "
                     estimator.measure()
                     N_current += Nshots_batch
                     assert N_current in N_steps
+                    if j == 0 :
+                        with open("settings.txt", "a", encoding="utf-8") as f:  # 'a' 模式追加内容
+                            print("setting number", len(estimator.settings_dict), file=f)
+                        with open("settings.txt", "a", encoding="utf-8") as f:  # 'a' 模式追加内容
+                            print("shot number", Nval, file=f)
+                        with open("settings.txt", "a", encoding="utf-8") as f:  # 'a' 模式追加内容
+                            print(label, estimator.settings_dict, file=f)
+
                 if use_naive:
                     temp = deepcopy(estimator.measurement_scheme)
                     temp.update_variance_estimate(Nval != N_steps[i]) # update covariance matrix only if no further settings have to be alloted
@@ -131,22 +154,34 @@ def track_method_epsilon(estimator,E_GS,delta,benchmark_params={"Nshots":1000, "
                 if save_dicts and j==0:
                     saved_settings[str(Nval)] = estimator.settings_dict
                     save_to_json(saved_settings,filename)
+
         temp = abs(energies - E_GS)
         eps_empirical = np.mean(temp,axis=0)
         eps_std = np.std(temp,axis=0)
         assert len(eps_empirical) == len(eps_provable) and len(eps_empirical) == len(eps_std), "Lengths of arrays have changed during is_adaptive-part."
         eps_provable /= Nreps
+
     else:
+        print("not sampling")
         # find measurement settings once and sample based on these
         estimator.reset()
         if load_at_N is not None:
+            print("not none")
             estimator = load_settings(filename,estimator,N=load_at_N)
             assert estimator.num_settings == load_at_N, "Loading settings from file did not work."
             N_current = load_at_N
             filename += "_long"
         for i,Nval in enumerate(N_steps):
             estimator.propose_next_settings(Nval-N_current)
+            with open("settings.txt", "a", encoding="utf-8") as f:  # 'a' 模式追加内容
+                print("setting number", len(estimator.settings_dict), file=f)
+            with open("settings.txt", "a", encoding="utf-8") as f:  # 'a' 模式追加内容
+                print("shot number", Nval, file=f)
+            with open("settings.txt", "a", encoding="utf-8") as f:  # 'a' 模式追加内容
+                print(label, estimator.settings_dict, file=f)
+
             for j in range(Nreps):
+                # print("Nreps", Nreps)
                 estimator.clear_outcomes()
                 estimator.measure()
                 energies[j,i] = estimator.get_energy()
@@ -158,7 +193,9 @@ def track_method_epsilon(estimator,E_GS,delta,benchmark_params={"Nshots":1000, "
             if save_dicts:
                 saved_settings[str(Nval)] = estimator.settings_dict
                 save_to_json(saved_settings,filename)
+
         if truncate:
+            print("hhhh")
             saved_settings_trunc = {}
             N_current = 0
             energies_truncated = np.zeros_like(energies)
