@@ -1,6 +1,7 @@
 # standard modules
 import numpy as np
 import pandas as pd
+from IPython.display import Image, display
 from os import mkdir
 from os.path import isdir, isfile
 from time import perf_counter
@@ -16,7 +17,8 @@ from shadowgrouping.energy_estimator import Energy_estimator, StateSampler, Sign
 # helper functions to load Hamiltonian decompositions
 from shadowgrouping.measurement_schemes import setting_to_str
 from shadowgrouping.hamiltonian import get_pauli_list, get_groundstate, char_to_int, int_to_char, mappings, \
-    load_pauli_list, load_pauli_list1, load_pauli_list2, load_pauli_list3, load_pauli_list4, load_pauli_list5
+    load_pauli_list, load_pauli_list1, load_pauli_list2, load_pauli_list3, load_pauli_list4, load_pauli_list5, \
+    load_pauli_list6
 from shadowgrouping.benchmark import track_method_epsilon, save_to_json
 from shadowgrouping.ogm_fc import optimize_ogm_fc_distribution, save_group_distribution
 
@@ -685,7 +687,7 @@ def H2O():
     basis_set = "sto3g"  # choose one out of ["sto3g","6-31g"] - the latter only for H2 molecule
     savename = f"H2O"
 
-    observables, w, offset, E_GS, state = load_pauli_list5(folder_Hamiltonians, molecule_name, basis_set,
+    observables, w, offset, E_GS, state = load_pauli_list6(folder_Hamiltonians, molecule_name, basis_set,
                                                            mapping_name)
     # print("w", w)
     print("=====================================")

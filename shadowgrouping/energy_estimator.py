@@ -1,3 +1,5 @@
+import gc
+
 import numpy as np
 from qibo import models, gates
 from shadowgrouping.measurement_schemes import hit_by
@@ -265,24 +267,33 @@ class Energy_estimator():
                 plan = self.measurement_scheme.get_group_plan(gid)
                 # with open("measurement_settings.txt", "a") as file:
                 #     file.write(f"GROUP_{gid}\n")
+                samples = None
+                basis_index = None
+                bits = None
+                powers = None
+                eigvals = None
+                vals = None
+                try:
+                    samples = self.state.sample_with_transform(plan["qubits"], plan["unitary"], nshots=reps)
+                    q = plan["qubits"]
+                    if len(q) == 0:
+                        basis_index = np.zeros(reps, dtype=int)
+                    else:
+                        bits = samples[:, q].astype(int)
+                        powers = (1 << np.arange(len(q)-1, -1, -1)).astype(int)
+                        basis_index = np.sum(bits * powers[np.newaxis, :], axis=1)
 
-                samples = self.state.sample_with_transform(plan["qubits"], plan["unitary"], nshots=reps)
-                q = plan["qubits"]
-                if len(q) == 0:
-                    basis_index = np.zeros(reps, dtype=int)
-                else:
-                    bits = samples[:, q].astype(int)
-                    powers = (1 << np.arange(len(q)-1, -1, -1)).astype(int)
-                    basis_index = np.sum(bits * powers[np.newaxis, :], axis=1)
-
-                eigvals = plan["eigenvalues"]
-                for local_i, obs_idx in enumerate(plan["obs_indices"]):
-                    vals = eigvals[local_i, basis_index]
-                    obs_idx = int(obs_idx)
-                    self.running_avgs[obs_idx] = (
-                        self.running_avgs[obs_idx] * self.running_N[obs_idx] + np.sum(vals)
-                    ) / (self.running_N[obs_idx] + reps)
-                    self.running_N[obs_idx] += reps
+                    eigvals = plan["eigenvalues"]
+                    for local_i, obs_idx in enumerate(plan["obs_indices"]):
+                        vals = eigvals[local_i, basis_index]
+                        obs_idx = int(obs_idx)
+                        self.running_avgs[obs_idx] = (
+                            self.running_avgs[obs_idx] * self.running_N[obs_idx] + np.sum(vals)
+                        ) / (self.running_N[obs_idx] + reps)
+                        self.running_N[obs_idx] += reps
+                finally:
+                    del vals, eigvals, powers, bits, basis_index, samples, plan
+                    gc.collect()
 
             self.num_outcomes = self.num_settings
             self.group_buffer = {}

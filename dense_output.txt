@@ -1,0 +1,16 @@
+type dense num 3 method <shadowgrouping.measurement_schemes.Shadow_Grouping object at 0x3058b3cd0> setting 14
+type dense num 4 method <shadowgrouping.measurement_schemes.Shadow_Grouping object at 0x3058b3cd0> setting 44
+type dense num 5 method <shadowgrouping.measurement_schemes.Shadow_Grouping object at 0x3058f7190> setting 128
+type dense num 6 method <shadowgrouping.measurement_schemes.Shadow_Grouping object at 0x30592a7f0> setting 391
+type dense num 3 method <shadowgrouping.measurement_schemes.SettingSampler object at 0x144a88640> setting 14
+type dense num 4 method <shadowgrouping.measurement_schemes.SettingSampler object at 0x17fab2b20> setting 42
+type dense num 5 method <shadowgrouping.measurement_schemes.SettingSampler object at 0x17fada6a0> setting 131
+type dense num 6 method <shadowgrouping.measurement_schemes.SettingSampler object at 0x17fb3fbb0> setting 384
+type dense num 3 method <shadowgrouping.measurement_schemes.Derandomization object at 0x13fcc76a0> setting 16
+type dense num 4 method <shadowgrouping.measurement_schemes.Derandomization object at 0x309d719a0> setting 52
+type dense num 5 method <shadowgrouping.measurement_schemes.Derandomization object at 0x309d8c760> setting 160
+type dense num 6 method <shadowgrouping.measurement_schemes.Derandomization object at 0x309dc86d0> setting 467
+type dense num 3 method <shadowgrouping.measurement_schemes.Derandomization object at 0x1382076a0> setting 27
+type dense num 4 method <shadowgrouping.measurement_schemes.Derandomization object at 0x16b534b20> setting 81
+type dense num 5 method <shadowgrouping.measurement_schemes.Derandomization object at 0x16b534e80> setting 243
+type dense num 6 method <shadowgrouping.measurement_schemes.Derandomization object at 0x16b534880> setting 688

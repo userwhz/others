@@ -429,7 +429,7 @@ def load_pauli_list6(folder_hamiltonian, molecule_name, basis_name, encoding, ve
 
     available_folders = os.listdir(folder_hamiltonian)
     # txt文件
-    folder_name = "BeH2"
+    folder_name = "BeH2/hamil_class"
     base_name = "hamiltonian_BeH2_sto3g_14"
     file_name = f"{base_name}_pauli.txt"
 

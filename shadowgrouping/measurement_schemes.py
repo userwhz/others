@@ -144,69 +144,84 @@ def build_commuting_groups(observables, commutation_mode="qwc", max_support_qubi
 
     return split_groups
 
+def build_fc_group_plan(observables, group, group_id=0, max_support_qubits=None):
+    """Build one basis-change plan for FC grouped measurement.
+
+    The 2**k x 2**k matrices can be several GiB for large k, so this function
+    avoids keeping all Pauli matrices at once. Callers should also avoid caching
+    the returned plan longer than the measurement that needs it.
+    """
+    obs_indices = np.array(group, dtype=int)
+    support_mask = np.any(observables[obs_indices] != 0, axis=0)
+    qubits = np.where(support_mask)[0]
+
+    if max_support_qubits is not None and len(qubits) > int(max_support_qubits):
+        raise MemoryError(
+            "FC group {} spans {} qubits, exceeding max_support_qubits={}."
+            " Reduce group support size or change joint-measurement implementation.".format(
+                group_id, len(qubits), int(max_support_qubits)
+            )
+        )
+
+    if len(qubits) == 0:
+        return {
+            "group_id": int(group_id),
+            "obs_indices": obs_indices,
+            "qubits": np.array([], dtype=int),
+            "unitary": np.array([[1]], dtype=complex),
+            "eigenvalues": np.ones((len(obs_indices), 1), dtype=int),
+        }
+
+    dim = 2 ** len(qubits)
+    basis = None
+    for trial in range(8):
+        coeffs = np.array([np.cos((k + 1) * (trial + 1)) for k in range(len(obs_indices))], dtype=float)
+        H = np.zeros((dim, dim), dtype=complex)
+        for c, obs_idx in zip(coeffs, obs_indices):
+            mat = pauli_row_to_matrix(observables[int(obs_idx)][qubits])
+            H += c * mat
+            del mat
+
+        _, vecs = np.linalg.eigh(H)
+        del H
+
+        # A generic linear combination of mutually commuting Hermitian Paulis
+        # has a joint eigenbasis. Rechecking by materializing every transformed
+        # matrix doubles peak memory for large groups, so use the first basis.
+        basis = vecs
+        break
+
+    if basis is None:
+        basis = np.eye(dim, dtype=complex)
+
+    eigenvalues = []
+    for obs_idx in obs_indices:
+        mat = pauli_row_to_matrix(observables[int(obs_idx)][qubits])
+        transformed = mat @ basis
+        vals = np.real(np.sum(np.conj(basis) * transformed, axis=0))
+        vals = np.where(vals >= 0, 1, -1).astype(int)
+        eigenvalues.append(vals)
+        del mat, transformed, vals
+
+    unitary = basis.conj().T
+    del basis
+
+    return {
+        "group_id": int(group_id),
+        "obs_indices": obs_indices,
+        "qubits": qubits.astype(int),
+        "unitary": unitary,
+        "eigenvalues": np.array(eigenvalues, dtype=int),
+    }
+
+
 def build_fc_group_plans(observables, groups, max_support_qubits=None):
     """Build per-group basis-change plans for FC grouped measurement."""
     plans = {}
     for gid, group in enumerate(groups):
-        obs_indices = np.array(group, dtype=int)
-        support_mask = np.any(observables[obs_indices] != 0, axis=0)
-        qubits = np.where(support_mask)[0]
-
-        if max_support_qubits is not None and len(qubits) > int(max_support_qubits):
-            raise MemoryError(
-                "FC group {} spans {} qubits, exceeding max_support_qubits={}."
-                " Reduce group support size or change joint-measurement implementation.".format(
-                    gid, len(qubits), int(max_support_qubits)
-                )
-            )
-
-        if len(qubits) == 0:
-            plans[gid] = {
-                "group_id": gid,
-                "obs_indices": obs_indices,
-                "qubits": np.array([], dtype=int),
-                "unitary": np.array([[1]], dtype=complex),
-                "eigenvalues": np.ones((len(obs_indices), 1), dtype=int),
-            }
-            continue
-
-        pauli_mats = [pauli_row_to_matrix(observables[idx][qubits]) for idx in obs_indices]
-        basis = None
-        for trial in range(8):
-            coeffs = np.array([np.cos((k + 1) * (trial + 1)) for k in range(len(pauli_mats))], dtype=float)
-            H = np.zeros_like(pauli_mats[0], dtype=complex)
-            for c, mat in zip(coeffs, pauli_mats):
-                H += c * mat
-            _, vecs = np.linalg.eigh(H)
-
-            ok = True
-            for mat in pauli_mats:
-                d = vecs.conj().T @ mat @ vecs
-                off = d - np.diag(np.diag(d))
-                if np.max(np.abs(off)) > 1e-7:
-                    ok = False
-                    break
-            if ok:
-                basis = vecs
-                break
-
-        if basis is None:
-            basis = np.eye(pauli_mats[0].shape[0], dtype=complex)
-
-        eigenvalues = []
-        for mat in pauli_mats:
-            d = basis.conj().T @ mat @ basis
-            vals = np.real(np.diag(d))
-            vals = np.where(vals >= 0, 1, -1).astype(int)
-            eigenvalues.append(vals)
-
-        plans[gid] = {
-            "group_id": gid,
-            "obs_indices": obs_indices,
-            "qubits": qubits.astype(int),
-            "unitary": basis.conj().T,
-            "eigenvalues": np.array(eigenvalues, dtype=int),
-        }
+        plans[gid] = build_fc_group_plan(
+            observables, group, group_id=gid, max_support_qubits=max_support_qubits
+        )
     return plans
 
 ##########################################################################################
@@ -390,7 +405,7 @@ class Shadow_Grouping(Measurement_scheme):
         self.group_plans = None
         if self.commutation_mode == "fc":
             self.groups_fc = self._build_fc_groups()
-            self.group_plans = self._build_fc_group_plans()
+            self.group_plans = {}
         if self.weight_function is not None:
             test = self.weight_function(self.w,self.eps,self.N_hits)
             assert len(test) == len(self.w), "Weight function is supposed to return an array of shape {} (i.e. number of observables) but returned an array of shape {}".format(self.w.shape,test.shape)
@@ -410,7 +425,13 @@ class Shadow_Grouping(Measurement_scheme):
     def get_group_plan(self, group_id):
         if self.group_plans is None:
             return None
-        return self.group_plans[int(group_id)]
+        gid = int(group_id)
+        return build_fc_group_plan(
+            self.obs,
+            self.groups_fc[gid],
+            group_id=gid,
+            max_support_qubits=self.max_support_qubits,
+        )
 
     def reset(self):
         self.N_hits = np.zeros_like(self.N_hits)
@@ -738,7 +759,7 @@ class SettingSampler(Measurement_scheme):
             probs = probs / total
 
         self.groups_fc = groups
-        self.group_plans = build_fc_group_plans(self.obs, self.groups_fc)
+        self.group_plans = {}
 
         # Provide representative Pauli strings (one per group) for bookkeeping/logging.
         reps = []
@@ -755,9 +776,7 @@ class SettingSampler(Measurement_scheme):
         self.groups_fc = build_commuting_groups(
             self.obs, commutation_mode="fc", max_support_qubits=self.max_support_qubits
         )
-        self.group_plans = build_fc_group_plans(
-            self.obs, self.groups_fc, max_support_qubits=self.max_support_qubits
-        )
+        self.group_plans = {}
 
         reps = []
         probs = []
@@ -778,7 +797,13 @@ class SettingSampler(Measurement_scheme):
     def get_group_plan(self, group_id):
         if self.group_plans is None:
             return None
-        return self.group_plans[int(group_id)]
+        gid = int(group_id)
+        return build_fc_group_plan(
+            self.obs,
+            self.groups_fc[gid],
+            group_id=gid,
+            max_support_qubits=self.max_support_qubits,
+        )
 
     def find_setting(self,N_samples=1):
         """ Generate settings from the given distribution p. Can find multiple settings at once by providing a value for
