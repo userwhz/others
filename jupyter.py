@@ -814,7 +814,7 @@ def BeH2():
     basis_set = "sto3g"  # choose one out of ["sto3g","6-31g"] - the latter only for H2 molecule
     savename = f"BeH2"
 
-    observables, w, offset, E_GS, state = load_pauli_list5(folder_Hamiltonians, molecule_name, basis_set,
+    observables, w, offset, E_GS, state = load_pauli_list6(folder_Hamiltonians, molecule_name, basis_set,
                                                            mapping_name)
     # print("w", w)
     print("=====================================")
