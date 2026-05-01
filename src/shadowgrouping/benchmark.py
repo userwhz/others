@@ -1,5 +1,5 @@
-from shadowgrouping.measurement_schemes import N_delta
-from shadowgrouping.hamiltonian import char_to_int
+from .measurement_schemes import N_delta
+from .hamiltonian import char_to_int
 import numpy as np
 from copy import deepcopy
 import json

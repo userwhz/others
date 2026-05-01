@@ -49,8 +49,29 @@ The `src/` directory has been cleaned to retain only the ShadowGrouping method:
 - `molecules.py` — Molecular geometry definitions
 - `benchmark.py` — Benchmark utilities
 
+## Environment Management
+
+使用 **uv** 进行 Python 环境管理。所有依赖通过 `uv` 安装和管理。
+
+```bash
+# 初始化项目环境
+uv venv
+source .venv/bin/activate
+uv pip install -r requirements.txt
+```
+
+## Code Hint 规范
+
+所有输入输出（代码块、命令、文件内容）都需要有代码提示（language tag）。例如：
+
+- Python 代码使用 ````python`
+- Bash 命令使用 ````bash`
+- 文件内容使用合适的 language tag
+
+没有代码提示的代码块是不被允许的。
+
 ## Running the Code
 
 - Python 3.9 environment with Qiskit < 1.0
-- The project uses qibo for circuit simulation (not qiskit-aer)
+- 使用 uv 管理虚拟环境和依赖
 - Key dependencies: numpy, scipy, qiskit-nature, qibo, pandas, matplotlib

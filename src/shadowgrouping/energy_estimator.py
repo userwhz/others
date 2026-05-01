@@ -1,6 +1,6 @@
 import numpy as np
 from qibo import models, gates
-from shadowgrouping.hamiltonian import int_to_char, char_to_int
+from .hamiltonian import int_to_char, char_to_int
 
 class StateSampler():
     """ Convenience class that holds a fixed state of length 2**num_qubits. The latter number is inferred automatically.
