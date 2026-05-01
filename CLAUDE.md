@@ -51,27 +51,22 @@ The `src/` directory has been cleaned to retain only the ShadowGrouping method:
 
 ## Environment Management
 
-使用 **uv** 进行 Python 环境管理。所有依赖通过 `uv` 安装和管理。
+使用 **uv** 进行 Python 环境管理。`pyproject.toml` 定义了所有依赖。
 
 ```bash
-# 初始化项目环境
-uv venv
-source .venv/bin/activate
-uv pip install -r requirements.txt
+# 初始化项目环境（创建 .venv 并安装所有依赖）
+uv sync
 ```
-
-## Code Hint 规范
-
-所有输入输出（代码块、命令、文件内容）都需要有代码提示（language tag）。例如：
-
-- Python 代码使用 ````python`
-- Bash 命令使用 ````bash`
-- 文件内容使用合适的 language tag
-
-没有代码提示的代码块是不被允许的。
 
 ## Running the Code
 
-- Python 3.9 environment with Qiskit < 1.0
-- 使用 uv 管理虚拟环境和依赖
-- Key dependencies: numpy, scipy, qiskit-nature, qibo, pandas, matplotlib
+```bash
+# 运行测试脚本
+uv run python scripts/test_shadowgrouping.py
+
+# 运行 pytest
+uv run pytest
+```
+
+- Python >= 3.9，Qiskit < 1.0
+- Core dependencies: numpy, qiskit (qiskit-terra)

@@ -58,6 +58,15 @@ Again, this installation process depends on your system and internet speed, but 
   - Open it in your browser
   - Then open `tutorial.ipynb` which includes the minimal working example. Running all executable code in the notebooks sequentially should not take more than a few minutes on a standard laptop. If other molecules are selected, however, this run time can easily turn into a few hours though.
 
+## 使用说明
+1. 每次数据会生成在 `generated_data` 文件夹里面，后面每次使用都得把里面的结果转移，不然所有的 py 文件 print 以及结果都不会保存。
+
+2. measurement setting 会保存在 `measurement_settings.txt` 文件里，需要做统计得到。文件采用追加写，需要手动删除或者转移数据。具体设置在 `shadowgrouping/energy_estimator.py` 文件里面。
+
+3. `jupyter.py` 可以直接运行，文件里面的 `load_pauli_list` 函数点进去可以修改量子态和哈密顿量。`track_method_epsilon` 函数则直接写死修改 shots。
+
+4. `.shadowgrouping_env` 是已经配置好的环境，可以直接激活使用。主要 qiskit 得使用 1.0 以下版本。
+
 # License
 
 This project is covered under the **Apache 2.0 License**.

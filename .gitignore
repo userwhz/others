@@ -61,9 +61,14 @@ venv.bak/
 # macOS
 .DS_Store
 
+# IDEs
+.idea/
+.vscode/
+
 # Ignore large data files or generated outputs
 *.npy
 *.mat
 data/
 generated_data/
 *_output.txt
+measurement_settings.txt
