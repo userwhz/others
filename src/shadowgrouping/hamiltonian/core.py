@@ -59,7 +59,9 @@ class Hamiltonian():
     def SummedOp(self):
         paulis = []
         for P, coeff_P in zip(self.observables,self.weights):
-            paulis.append(coeff_P * PauliOp(Pauli(P)))
+            # Reverse P: codebase uses little-endian (pos i = qubit i),
+            # but qiskit Pauli uses big-endian (pos 0 = qubit N-1).
+            paulis.append(coeff_P * PauliOp(Pauli(P[::-1])))
         return SummedOp(paulis)
 
     def ground(self, sparse=False):

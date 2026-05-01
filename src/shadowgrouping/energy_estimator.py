@@ -1,70 +1,68 @@
 import numpy as np
-from qibo import models, gates
+from qiskit import QuantumCircuit
+from qiskit.quantum_info import Statevector, DensityMatrix
 from .hamiltonian import int_to_char, char_to_int
 
-class StateSampler():
-    """ Convenience class that holds a fixed state of length 2**num_qubits. The latter number is inferred automatically.
-        Provides a sampling method that obtains samples from the state in the chosen basis.
 
-        Input:
-        - state, numpy array of size 2**N with N = num_qubits. Coefficients are to be specified in the computational basis.
-        - density_matrix, bool (defaults to False). Whether <state> has to be provided as density matrix (2^N,2^N)
-        or state vector (2^N,)
-    """
-    def __init__(self,state,density_matrix=False):
+class StateSampler:
+    def __init__(self, state, density_matrix=False):
         self.state = np.array(state)
         self.num_qubits = int(np.log2(self.state.shape[0]))
         self.density_matrix = bool(density_matrix or self.state.ndim == 2)
-        assert len(self.state) == 2**self.num_qubits, "State size has to be of size 2**N for some integer N."
-        self.circuit = models.Circuit(self.num_qubits,density_matrix=self.density_matrix)
-        self.X = [gates.H,gates.I]
-        S_dagger = lambda i: gates.U1(i,-np.pi/2)
-        self.Y = [S_dagger,gates.H]
-        self.Z = [gates.I,gates.I]
-        self.I = self.Z
-        return
+        assert len(self.state) == 2 ** self.num_qubits, (
+            "State size has to be of size 2**N for some integer N."
+        )
+        if self.density_matrix:
+            self._state = DensityMatrix(self.state)
+        else:
+            self._state = Statevector(self.state)
 
-    def sample(self,meas_basis=None,nshots=1):
-        """ Draws <nshots> samples from the state.
-            If no measurement basis is defined, samples are drawn in the computational basis.
+    def _evolve_and_sample(self, circuit, nshots):
+        if self.density_matrix:
+            evolved = self._state.evolve(circuit)
+            probs = evolved.probabilities()
+            indices = np.random.choice(len(probs), size=nshots, p=probs)
+            bits = (
+                (indices[:, None] & (1 << np.arange(self.num_qubits)[::-1])) > 0
+            ).astype(int)
+        else:
+            evolved = self._state.evolve(circuit)
+            memory = evolved.sample_memory(nshots)
+            # qiskit bitstrings have qubit 0 as the rightmost bit;
+            # reverse so column i corresponds to qubit i (matching qibo convention).
+            bits = np.array(
+                [[int(b) for b in reversed(bitstring)] for bitstring in memory],
+                dtype=int,
+            )
+        return bits
 
-            Inputs:
-            - meas_basis as a Pauli string, i.e. a str of length num_qubits containing only X,Y,Z,I.
-            - nshots (int) specifying how many samples to draw.
+    def sample(self, meas_basis=None, nshots=1):
+        if meas_basis is None:
+            meas_basis = "Z" * self.num_qubits
 
-            Returns:
-            - samples, numpy array of shape (nshots x  num_qubits).
-        """
-        c = self.circuit.copy(deep=True)
-        if meas_basis is not None:
-            assert len(meas_basis)==self.num_qubits, "Measurement basis has to be specified for each qubit."
-            c.add([getattr(self,s)[0](i) for i,s in enumerate(meas_basis)])
-            c.add([getattr(self,s)[1](i) for i,s in enumerate(meas_basis)])
-        c.add(gates.M(*range(self.num_qubits)))
-        out = c(initial_state=self.state.copy(),nshots=nshots)
-        out = out.samples()
-        out = out * np.array([s!="I" for s in meas_basis],dtype=int)[np.newaxis,:]
-        return -2*out + 1
+        assert len(meas_basis) == self.num_qubits, (
+            "Measurement basis has to be specified for each qubit."
+        )
+        circuit = QuantumCircuit(self.num_qubits)
+        for i, s in enumerate(meas_basis):
+            if s == "X":
+                circuit.h(i)
+            elif s == "Y":
+                circuit.sdg(i)
+                circuit.h(i)
+        bits = self._evolve_and_sample(circuit, nshots)
+        mask = np.array([s != "I" for s in meas_basis], dtype=int)[np.newaxis, :]
+        return -2 * bits * mask + 1
 
     def sample_with_transform(self, qubits, unitary, nshots=1):
-        """Draw samples after applying an explicit basis-change unitary on selected qubits.
-
-        Returns raw computational-basis bits in {0,1}.
-        """
-        c = self.circuit.copy(deep=True)
+        circuit = QuantumCircuit(self.num_qubits)
         if qubits is not None and len(qubits) > 0:
-            c.add(gates.Unitary(unitary, *list(map(int, qubits))))
-        c.add(gates.M(*range(self.num_qubits)))
-        out = c(initial_state=self.state.copy(), nshots=nshots)
-        return out.samples()
+            circuit.unitary(unitary, list(map(int, qubits)))
+        return self._evolve_and_sample(circuit, nshots)
 
-    def index_to_string(self,index_list):
-        """ Helper function that maps a list of Pauli indices to a Pauli string, i.e.
-            0 -> I, 1 -> X, 2 -> Y, 3 -> Z
-            Returns the Pauli string.
-        """
+    def index_to_string(self, index_list):
         pauli_string = ""
-        for ind in np.array(index_list,dtype=int):
+        for ind in np.array(index_list, dtype=int):
             assert ind in range(4), "Elements of index_list have to be in {0,1,2,3}."
             pauli_string += int_to_char[ind]
         return pauli_string
