@@ -3,6 +3,7 @@ from shadowgrouping.hamiltonian import char_to_int
 import numpy as np
 from copy import deepcopy
 import json
+from time import perf_counter, time
 
 class NumpyEncoder(json.JSONEncoder):
     """ Custom encoder for numpy data types """
@@ -69,6 +70,89 @@ def load_settings(filename,estimator,N=None):
         estimator.measurement_scheme.N_hits[is_hit] += reps
     return estimator
 
+def _append_timing(filename, row):
+    if filename is None:
+        return
+    with open(filename, "a", encoding="utf-8") as f:
+        json.dump(row, f, cls=NumpyEncoder)
+        f.write("\n")
+
+def _print_timing(row):
+    parts = ["[TIMING]"]
+    for key in ("label", "stage", "shots", "batch_shots", "elapsed_s", "settings", "actual_shots"):
+        if key in row:
+            value = row[key]
+            if isinstance(value, float):
+                value = "{:.6f}".format(value)
+            parts.append("{}={}".format(key, value))
+    print(" ".join(parts), flush=True)
+
+def _take_first_counts(counts, nshots):
+    trimmed = {}
+    remaining = int(nshots)
+    for key, count in counts.items():
+        if remaining <= 0:
+            break
+        take = min(int(count), remaining)
+        if take > 0:
+            trimmed[key] = take
+            remaining -= take
+    return trimmed, int(nshots) - remaining
+
+def _time_measurement_only(estimator, nshots):
+    """Time only circuit simulation for up to nshots already-generated settings."""
+    saved = {
+        "settings_buffer": estimator.settings_buffer.copy(),
+        "group_buffer": estimator.group_buffer.copy(),
+        "running_avgs": estimator.running_avgs.copy(),
+        "running_N": estimator.running_N.copy(),
+        "num_settings": estimator.num_settings,
+        "num_outcomes": estimator.num_outcomes,
+    }
+    has_outcome_dict = hasattr(estimator, "outcome_dict")
+    if has_outcome_dict:
+        saved["outcome_dict"] = estimator.outcome_dict.copy()
+
+    try:
+        if estimator._uses_group_circuit_mode() and len(estimator.group_dict) > 0:
+            trimmed, actual_shots = _take_first_counts(estimator.group_dict, nshots)
+            estimator.group_buffer = trimmed
+            estimator.settings_buffer = {}
+        else:
+            trimmed, actual_shots = _take_first_counts(estimator.settings_dict, nshots)
+            estimator.settings_buffer = trimmed
+            estimator.group_buffer = {}
+        if actual_shots == 0:
+            return None, 0
+
+        estimator.running_avgs = np.zeros_like(estimator.running_avgs)
+        estimator.running_N = np.zeros_like(estimator.running_N)
+        estimator.num_settings = actual_shots
+        estimator.num_outcomes = 0
+
+        tstart = perf_counter()
+        estimator.measure()
+        return perf_counter() - tstart, actual_shots
+    finally:
+        estimator.settings_buffer = saved["settings_buffer"]
+        estimator.group_buffer = saved["group_buffer"]
+        estimator.running_avgs = saved["running_avgs"]
+        estimator.running_N = saved["running_N"]
+        estimator.num_settings = saved["num_settings"]
+        estimator.num_outcomes = saved["num_outcomes"]
+        if has_outcome_dict:
+            estimator.outcome_dict = saved["outcome_dict"]
+
+def _record_timing(filename, label, stage, **kwargs):
+    row = {
+        "timestamp": time(),
+        "label": label,
+        "stage": stage,
+    }
+    row.update(kwargs)
+    _print_timing(row)
+    _append_timing(filename, row)
+
 def track_method_epsilon(estimator,E_GS,delta,benchmark_params={"Nshots":1000, "Nreps": 100, "Nsteps": 10, "truncate": False, "Nstart": None, "settings_filename": None,"load_at": None}, label = ""):
     assert isinstance(benchmark_params,dict) or benchmark_params is None, "benchmark_params have to be either None or a dictionary."
     if benchmark_params is None:
@@ -86,15 +170,24 @@ def track_method_epsilon(estimator,E_GS,delta,benchmark_params={"Nshots":1000, "
     save_dicts = filename is not None
     truncate = benchmark_params.get("truncate", False)
     use_naive = benchmark_params.get("use_naive", False)
+    timing_filename = benchmark_params.get("timing_filename", "timing.jsonl")
+    timing_shots = max(1, int(benchmark_params.get("timing_shots", 10)))
+    timing_only = bool(benchmark_params.get("timing_only", False))
     N_steps = np.unique(np.round(np.logspace(np.log10(Nstart),np.log10(Nshots),Nsteps),0)).astype(int)
+    N_steps_override = benchmark_params.get("N_steps_override", None)
 
 
 
-    Nshots = 2038
-    Nreps = 20
-    # N_steps = [12, 45, 160, 572, 2038, 7256, 25848]
-    N_steps = [ 572, 2038, 3845,7256, 13695,25848]
-    # N_steps = [1000, 3000, 7000, 15000, 35000, 65000, 100000]
+    if N_steps_override is not None:
+        N_steps = np.array(N_steps_override, dtype=int)
+        N_steps = np.unique(N_steps[N_steps > 0])
+        Nshots = int(np.max(N_steps))
+    else:
+        Nshots = 2038
+        Nreps = 20
+        # N_steps = [12, 45, 160, 572, 2038, 7256, 25848]
+        N_steps = [ 572, 2038, 3845,7256, 13695,25848]
+        # N_steps = [1000, 3000, 7000, 15000, 35000, 65000, 100000]
 
 
 
@@ -131,7 +224,33 @@ def track_method_epsilon(estimator,E_GS,delta,benchmark_params={"Nshots":1000, "
                         assert N_current in estimator.update_steps
                 if Nval > N_current:
                     Nshots_batch = Nval - N_current
+                    group_tstart = perf_counter()
                     estimator.propose_next_settings(Nshots_batch)
+                    grouping_elapsed = perf_counter() - group_tstart
+                    _record_timing(
+                        timing_filename,
+                        label,
+                        "grouping",
+                        shots=int(Nval),
+                        batch_shots=int(Nshots_batch),
+                        elapsed_s=grouping_elapsed,
+                        settings=len(estimator.settings_dict),
+                    )
+                    measure_elapsed, actual_shots = _time_measurement_only(estimator, timing_shots)
+                    if measure_elapsed is not None:
+                        _record_timing(
+                            timing_filename,
+                            label,
+                            "measurement_only",
+                            shots=int(Nval),
+                            actual_shots=int(actual_shots),
+                            elapsed_s=measure_elapsed,
+                            settings=len(estimator.settings_dict),
+                        )
+                    if timing_only:
+                        N_current += Nshots_batch
+                        assert N_current in N_steps
+                        continue
                     estimator.measure()
                     N_current += Nshots_batch
                     assert N_current in N_steps
@@ -172,7 +291,29 @@ def track_method_epsilon(estimator,E_GS,delta,benchmark_params={"Nshots":1000, "
             N_current = load_at_N
             filename += "_long"
         for i,Nval in enumerate(N_steps):
+            group_tstart = perf_counter()
             estimator.propose_next_settings(Nval-N_current)
+            grouping_elapsed = perf_counter() - group_tstart
+            _record_timing(
+                timing_filename,
+                label,
+                "grouping",
+                shots=int(Nval),
+                batch_shots=int(Nval - N_current),
+                elapsed_s=grouping_elapsed,
+                settings=len(estimator.settings_dict),
+            )
+            measure_elapsed, actual_shots = _time_measurement_only(estimator, timing_shots)
+            if measure_elapsed is not None:
+                _record_timing(
+                    timing_filename,
+                    label,
+                    "measurement_only",
+                    shots=int(Nval),
+                    actual_shots=int(actual_shots),
+                    elapsed_s=measure_elapsed,
+                    settings=len(estimator.settings_dict),
+                )
             with open("settings.txt", "a", encoding="utf-8") as f:  # 'a' 模式追加内容
                 print("setting number", len(estimator.settings_dict), file=f)
             with open("settings.txt", "a", encoding="utf-8") as f:  # 'a' 模式追加内容
@@ -180,14 +321,15 @@ def track_method_epsilon(estimator,E_GS,delta,benchmark_params={"Nshots":1000, "
             with open("settings.txt", "a", encoding="utf-8") as f:  # 'a' 模式追加内容
                 print(label, estimator.settings_dict, file=f)
 
-            for j in range(Nreps):
-                # print("Nreps", Nreps)
-                estimator.clear_outcomes()
-                estimator.measure()
-                energies[j,i] = estimator.get_energy()
-            temp = abs(energies[:,i] - E_GS)
-            eps_empirical[i] = np.mean(temp)
-            eps_std[i] = np.std(temp)
+            if not timing_only:
+                for j in range(Nreps):
+                    # print("Nreps", Nreps)
+                    estimator.clear_outcomes()
+                    estimator.measure()
+                    energies[j,i] = estimator.get_energy()
+                temp = abs(energies[:,i] - E_GS)
+                eps_empirical[i] = np.mean(temp)
+                eps_std[i] = np.std(temp)
             N_current = Nval
             eps_provable[i] = sum(estimator.measurement_scheme.get_epsilon_sys_stat(delta))
             if save_dicts:

@@ -1,10 +1,11 @@
 # standard modules
+import json
 import numpy as np
 import pandas as pd
 from IPython.display import Image, display
-from os import mkdir
+from os import environ, mkdir
 from os.path import isdir, isfile
-from time import perf_counter
+from time import perf_counter, time
 # custom package
 
 # load the measurement schemes from the Benchmark
@@ -21,6 +22,80 @@ from shadowgrouping.hamiltonian import get_pauli_list, get_groundstate, char_to_
     load_pauli_list6
 from shadowgrouping.benchmark import track_method_epsilon, save_to_json
 from shadowgrouping.ogm_fc import optimize_ogm_fc_distribution, save_group_distribution
+
+def _env_flag(name):
+    return environ.get(name, "").lower() in ("1", "true", "yes", "on")
+
+def _env_int(name, default):
+    try:
+        return int(environ.get(name, default))
+    except (TypeError, ValueError):
+        return int(default)
+
+def _timing_filename():
+    return environ.get("SG_TIMING_FILE", "timing.jsonl")
+
+def _write_timing(row):
+    filename = _timing_filename()
+    if not filename:
+        return
+    with open(filename, "a", encoding="utf-8") as f:
+        json.dump(row, f)
+        f.write("\n")
+
+def _print_timing(row):
+    parts = ["[TIMING]"]
+    for key in ("label", "stage", "kind", "shots", "elapsed_s", "groups"):
+        if key in row:
+            value = row[key]
+            if isinstance(value, float):
+                value = "{:.6f}".format(value)
+            parts.append("{}={}".format(key, value))
+    print(" ".join(parts), flush=True)
+
+def _record_driver_timing(label, stage, **kwargs):
+    row = {"timestamp": time(), "label": label, "stage": stage}
+    row.update(kwargs)
+    _print_timing(row)
+    _write_timing(row)
+
+def _benchmark_params(N_STOP, N_plot, N_runs, N_START):
+    params = {
+        "Nshots": N_STOP,
+        "Nsteps": N_plot,
+        "Nreps": N_runs,
+        "Nstart": N_START,
+        "timing_filename": _timing_filename(),
+        "timing_shots": _env_int("SG_TIMING_SHOTS", 10),
+    }
+    if _env_flag("SG_TIMING_ONLY"):
+        shots = _env_int("SG_TIMING_SHOTS", 10)
+        params.update(
+            {
+                "Nshots": shots,
+                "Nsteps": 1,
+                "Nreps": 1,
+                "Nstart": shots,
+                "N_steps_override": [shots],
+                "timing_only": True,
+            }
+        )
+    return params
+
+def _timed_ogm_fc_distribution(label, observables, w, **kwargs):
+    tstart = perf_counter()
+    dist = optimize_ogm_fc_distribution(observables, w, **kwargs)
+    elapsed = perf_counter() - tstart
+    _record_driver_timing(
+        label,
+        "grouping",
+        kind="optimize_ogm_fc_distribution",
+        elapsed_s=elapsed,
+        groups=len(dist.groups),
+        T=kwargs.get("T"),
+        max_support_qubits=kwargs.get("max_support_qubits"),
+    )
+    return dist
 
 def f(IndexNum):
 
@@ -69,8 +144,8 @@ def f(IndexNum):
     methods["RandomPaulis_fc"] = Derandomization(observables, w, eps, delta=1, commutation_mode="fc")
     #
     # # methods["ShadowGrouping-truncated"] = Shadow_Grouping(observables,w,eps,Bernstein_bound(alpha=alpha)())
-    methods["Derandomization"] = Derandomization(observables, w, np.sqrt(0.9), use_one_norm=True)
-    methods["RandomPaulis"] = Derandomization(observables, w, eps, delta=1) # delta controls the randomness
+    # methods["Derandomization"] = Derandomization(observables, w, np.sqrt(0.9), use_one_norm=True)
+    # methods["RandomPaulis"] = Derandomization(observables, w, eps, delta=1)  # delta controls the randomness
     # # methods["ShadowGrouping-truncated"] = Shadow_Grouping(observables,w,eps,Bernstein_bound(alpha=alpha)())
     # methods["Derandomization"] = Derandomization(observables,w,np.sqrt(0.9),use_one_norm=True)
     # methods["RandomPaulis"] = Derandomization(observables,w,eps,delta=1) # delta controls the randomness
@@ -104,7 +179,7 @@ def f(IndexNum):
         print("label", label)
         if eps_dict.get(label+"-emp",None) is None:
             print("Benchmarking method " + label,"...")
-            params = {"Nshots": N_STOP, "Nsteps": N_plot, "Nreps": N_runs, "Nstart": N_START}
+            params = _benchmark_params(N_STOP, N_plot, N_runs, N_START)
             if label.find("truncate") >= 0:
                 params["truncate"] = True
                 label = label[:label.find("-trun")]
@@ -239,7 +314,7 @@ def liH(IndexNum):
         print("label", label)
         if eps_dict.get(label+"-emp",None) is None:
             print("Benchmarking method " + label,"...")
-            params = {"Nshots": N_STOP, "Nsteps": N_plot, "Nreps": N_runs, "Nstart": N_START}
+            params = _benchmark_params(N_STOP, N_plot, N_runs, N_START)
             if label.find("truncate") >= 0:
                 params["truncate"] = True
                 label = label[:label.find("-trun")]
@@ -374,7 +449,7 @@ def random1(type, IndexNum):
         print("label", label)
         if eps_dict.get(label+"-emp",None) is None:
             print("Benchmarking method " + label,"...")
-            params = {"Nshots": N_STOP, "Nsteps": N_plot, "Nreps": N_runs, "Nstart": N_START}
+            params = _benchmark_params(N_STOP, N_plot, N_runs, N_START)
             if label.find("truncate") >= 0:
                 params["truncate"] = True
                 label = label[:label.find("-trun")]
@@ -511,7 +586,7 @@ def heisenberg(IndexNum):
         print("label", label)
         if eps_dict.get(label + "-emp", None) is None:
             print("Benchmarking method " + label, "...")
-            params = {"Nshots": N_STOP, "Nsteps": N_plot, "Nreps": N_runs, "Nstart": N_START}
+            params = _benchmark_params(N_STOP, N_plot, N_runs, N_START)
             if label.find("truncate") >= 0:
                 params["truncate"] = True
                 label = label[:label.find("-trun")]
@@ -607,7 +682,7 @@ def klocal():
     # OGM (FC): build overlapped commuting groups + optimize group probabilities in Python,
     # then load as SettingSampler(commutation_mode="fc") which triggers joint-measurement in Energy_estimator.
     ogm_fc_file = savepath + "OGM_groups_klocal.txt"
-    dist = optimize_ogm_fc_distribution(observables, w, T=100000)
+    dist = _timed_ogm_fc_distribution("OverlappedGrouping_fc", observables, w, T=100000)
     save_group_distribution(ogm_fc_file, dist)
     methods["OverlappedGrouping_fc"] = Overlapped_Grouping(observables, w, ogm_fc_file, commutation_mode="fc")
     # all details can be found in benchmark.py in track_method_epsilon() to generate the benchmark data
@@ -628,7 +703,7 @@ def klocal():
         print("label", label)
         if eps_dict.get(label + "-emp", None) is None:
             print("Benchmarking method " + label, "...")
-            params = {"Nshots": N_STOP, "Nsteps": N_plot, "Nreps": N_runs, "Nstart": N_START}
+            params = _benchmark_params(N_STOP, N_plot, N_runs, N_START)
             if label.find("truncate") >= 0:
                 params["truncate"] = True
                 label = label[:label.find("-trun")]
@@ -727,7 +802,7 @@ def H2O():
     # OGM (FC): build overlapped commuting groups + optimize group probabilities in Python,
     # then load as SettingSampler(commutation_mode="fc") which triggers joint-measurement in Energy_estimator.
     ogm_fc_file = savepath + "OGM_groups_H2O.txt"
-    dist = optimize_ogm_fc_distribution(observables, w, T=100000, max_support_qubits=max_support_qubits)
+    dist = _timed_ogm_fc_distribution("OverlappedGrouping_fc", observables, w, T=100000, max_support_qubits=max_support_qubits)
     save_group_distribution(ogm_fc_file, dist)
     methods["OverlappedGrouping_fc"] = Overlapped_Grouping(
         observables,
@@ -754,7 +829,7 @@ def H2O():
         print("label", label)
         if eps_dict.get(label + "-emp", None) is None:
             print("Benchmarking method " + label, "...")
-            params = {"Nshots": N_STOP, "Nsteps": N_plot, "Nreps": N_runs, "Nstart": N_START}
+            params = _benchmark_params(N_STOP, N_plot, N_runs, N_START)
             if label.find("truncate") >= 0:
                 params["truncate"] = True
                 label = label[:label.find("-trun")]
@@ -854,7 +929,7 @@ def BeH2():
     # OGM (FC): build overlapped commuting groups + optimize group probabilities in Python,
     # then load as SettingSampler(commutation_mode="fc") which triggers joint-measurement in Energy_estimator.
     ogm_fc_file = savepath + "OGM_groups_BeH2.txt"
-    dist = optimize_ogm_fc_distribution(observables, w, T=100000, max_support_qubits=max_support_qubits)
+    dist = _timed_ogm_fc_distribution("OverlappedGrouping_fc", observables, w, T=100000, max_support_qubits=max_support_qubits)
     save_group_distribution(ogm_fc_file, dist)
     methods["OverlappedGrouping_fc"] = Overlapped_Grouping(
         observables,
@@ -881,7 +956,7 @@ def BeH2():
         print("label", label)
         if eps_dict.get(label + "-emp", None) is None:
             print("Benchmarking method " + label, "...")
-            params = {"Nshots": N_STOP, "Nsteps": N_plot, "Nreps": N_runs, "Nstart": N_START}
+            params = _benchmark_params(N_STOP, N_plot, N_runs, N_START)
             if label.find("truncate") >= 0:
                 params["truncate"] = True
                 label = label[:label.find("-trun")]
@@ -1000,7 +1075,7 @@ def LiH12():
         print("label", label)
         if eps_dict.get(label + "-emp", None) is None:
             print("Benchmarking method " + label, "...")
-            params = {"Nshots": N_STOP, "Nsteps": N_plot, "Nreps": N_runs, "Nstart": N_START}
+            params = _benchmark_params(N_STOP, N_plot, N_runs, N_START)
             if label.find("truncate") >= 0:
                 params["truncate"] = True
                 label = label[:label.find("-trun")]

@@ -67,3 +67,4 @@ venv.bak/
 data/
 generated_data/
 *_output.txt
+PERF_ANALYSIS.md

@@ -48,17 +48,17 @@ N_delta = lambda delta: 4*(2*np.sqrt(-np.log(delta))+1)**2
 
 def _pauli_single_matrix(ind):
     if ind == 0:
-        return np.array([[1, 0], [0, 1]], dtype=complex)
+        return np.array([[1, 0], [0, 1]], dtype=np.complex64)
     if ind == 1:
-        return np.array([[0, 1], [1, 0]], dtype=complex)
+        return np.array([[0, 1], [1, 0]], dtype=np.complex64)
     if ind == 2:
-        return np.array([[0, -1j], [1j, 0]], dtype=complex)
+        return np.array([[0, -1j], [1j, 0]], dtype=np.complex64)
     if ind == 3:
-        return np.array([[1, 0], [0, -1]], dtype=complex)
+        return np.array([[1, 0], [0, -1]], dtype=np.complex64)
     raise ValueError("Unknown Pauli index {}".format(ind))
 
 def pauli_row_to_matrix(row):
-    mat = np.array([[1]], dtype=complex)
+    mat = np.array([[1]], dtype=np.complex64)
     for ind in row:
         mat = np.kron(mat, _pauli_single_matrix(int(ind)))
     return mat
@@ -175,11 +175,11 @@ def build_fc_group_plan(observables, group, group_id=0, max_support_qubits=None)
     dim = 2 ** len(qubits)
     basis = None
     for trial in range(8):
-        coeffs = np.array([np.cos((k + 1) * (trial + 1)) for k in range(len(obs_indices))], dtype=float)
-        H = np.zeros((dim, dim), dtype=complex)
+        coeffs = np.array([np.cos((k + 1) * (trial + 1)) for k in range(len(obs_indices))], dtype=np.float32)
+        H = np.zeros((dim, dim), dtype=np.complex64)
         for c, obs_idx in zip(coeffs, obs_indices):
             mat = pauli_row_to_matrix(observables[int(obs_idx)][qubits])
-            H += c * mat
+            H += np.float32(c) * mat
             del mat
 
         _, vecs = np.linalg.eigh(H)
@@ -192,7 +192,7 @@ def build_fc_group_plan(observables, group, group_id=0, max_support_qubits=None)
         break
 
     if basis is None:
-        basis = np.eye(dim, dtype=complex)
+        basis = np.eye(dim, dtype=np.complex64)
 
     eigenvalues = []
     for obs_idx in obs_indices:
