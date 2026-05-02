@@ -1,9 +1,23 @@
 import numpy as np
 import pytest
-from shadowgrouping.hamiltonian import random_hamiltonian, Hamiltonian, char_to_int
+from qiskit.quantum_info import SparsePauliOp
+from shadowgrouping.hamiltonian import random_hamiltonian, char_to_int
 from shadowgrouping.measurement_schemes import Shadow_Grouping
 from shadowgrouping.energy_estimator import Energy_estimator, StateSampler
 from shadowgrouping.weight_functions import Bernstein_bound
+
+
+def _exact_ground_energy(ham: dict[str, float]) -> tuple[float, np.ndarray]:
+    """Compute exact ground-state energy via SparsePauliOp diagonalization."""
+    labels = list(ham.keys())
+    coeffs = np.array(list(ham.values()))
+    # Pauli strings in ham are little-endian (pos 0 = qubit 0).
+    # SparsePauliOp uses big-endian (rightmost = qubit 0), so reverse.
+    op = SparsePauliOp.from_list([(p[::-1], c) for p, c in ham.items()])
+    mat = op.to_matrix()
+    evalues, evectors = np.linalg.eigh(mat)
+    idx = int(np.argmin(evalues))
+    return float(evalues[idx]), evectors[:, idx]
 
 
 def test_shadowgrouping_random() -> None:
@@ -23,8 +37,8 @@ def test_shadowgrouping_random() -> None:
         [[char_to_int[c] for c in p] for p in pauli_strings], dtype=int
     )
 
-    H = Hamiltonian(weights, pauli_strings)
-    E_GS, state = H.ground()
+    # Theoretical ground truth via SparsePauliOp (qiskit builtin)
+    E_exact, state = _exact_ground_energy(ham)
 
     wf = Bernstein_bound(alpha=1)
     scheme = Shadow_Grouping(observables, weights, epsilon=epsilon,
@@ -34,10 +48,11 @@ def test_shadowgrouping_random() -> None:
 
     estimator.propose_next_settings(nshots)
     estimator.measure()
-    estimated_energy = estimator.get_energy()
+    E_estimated = estimator.get_energy()
 
-    error = abs(estimated_energy - E_GS)
+    error = abs(E_estimated - E_exact)
     assert error < tolerance, (
-        f"Energy estimate error {error:.4f} exceeds tolerance {tolerance}.\n"
-        f"Exact: {E_GS:.6f}, Estimated: {estimated_energy:.6f}"
+        f"Absolute error {error:.4f} exceeds tolerance {tolerance}.\n"
+        f"  Exact (SparsePauliOp): {E_exact:.6f}\n"
+        f"  ShadowGrouping est:    {E_estimated:.6f}"
     )
