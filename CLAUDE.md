@@ -58,15 +58,43 @@ The `src/` directory has been cleaned to retain only the ShadowGrouping method:
 uv sync
 ```
 
-## Running the Code
+## Testing
+
+使用 **pytest** 作为测试框架，所有测试放在 `tests/` 目录。
 
 ```bash
-# 运行测试脚本
-uv run python scripts/test_shadowgrouping.py
-
-# 运行 pytest
+# 运行全部测试
 uv run pytest
+
+# 显示详细输出
+uv run pytest -v
+
+# 运行单个测试文件
+uv run pytest tests/test_hamiltonian.py
+
+# 运行单个测试类或函数
+uv run pytest tests/test_measurement_schemes.py::TestHitBy
 ```
+
+### 测试结构
+
+```
+tests/
+├── __init__.py
+├── test_hamiltonian.py           # Hamiltonian, random_hamiltonian, char/int 映射
+├── test_measurement_schemes.py   # hit_by, qwc_compatible, N_delta, Shadow_Grouping
+├── test_weight_functions.py      # Bernstein_bound
+└── test_shadowgrouping.py        # 端到端集成测试
+```
+
+### 测试规范
+
+- 所有测试函数必须有类型提示（参数 + 返回值 `-> None`）
+- 使用 `pytest.fixture` 管理共享的测试对象
+- 使用 `pytest.mark.parametrize` 覆盖边界情况
+- 测试类按被测模块组织（`TestHitBy`, `TestShadowGrouping` 等）
+
+## Running the Code
 
 - Python >= 3.9，Qiskit < 1.0
 - Core dependencies: numpy, qiskit (qiskit-terra)

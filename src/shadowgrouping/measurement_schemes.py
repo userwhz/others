@@ -109,7 +109,7 @@ class Measurement_scheme:
 
     def get_epsilon_Bernstein(self, delta):
         if np.min(self.N_hits) == 0:
-            return np.infty
+            return np.inf
         w_abs = np.abs(self.w)
         w_abs /= np.sqrt(self.N_hits)
         norm = np.sum(w_abs)
