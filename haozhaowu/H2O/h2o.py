@@ -1,6 +1,7 @@
 import argparse
+import json
 import os
-from typing import Iterable, Tuple
+from typing import Dict, Iterable, Tuple
 
 import numpy as np
 from qiskit.quantum_info import SparsePauliOp
@@ -98,6 +99,17 @@ def save_pauli_txt(terms: Iterable[Tuple[str, complex]], out_file: str, atol: fl
 			first = False
 
 
+def save_pauli_json(terms: Iterable[Tuple[str, complex]], out_file: str, atol: float = 1e-12) -> None:
+	"""与 haozhaowu/Fermionic/gen_fermionic.py 一致：{"IIIX...": 实系数, ...}，sort_keys。"""
+	H_dict: Dict[str, float] = {}
+	for pauli_str, coeff in terms:
+		if abs(coeff) <= atol:
+			continue
+		H_dict[pauli_str] = float(np.real(coeff))
+	with open(out_file, "w", encoding="utf-8") as f:
+		json.dump(H_dict, f, indent=0, sort_keys=True)
+
+
 def save_ogm_txt(terms: Iterable[Tuple[str, complex]], out_file: str, atol: float = 1e-12) -> None:
 	with open(out_file, "w", encoding="utf-8") as f:
 		for pauli_str, coeff in terms:
@@ -191,11 +203,13 @@ def main() -> None:
 	terms = list(iter_terms_from_sparse_pauli_op(qubit_op))
 
 	pauli_txt_path = os.path.join(args.output_dir, f"hamiltonian_{args.tag}_pauli.txt")
+	pauli_json_path = os.path.join(args.output_dir, f"hamiltonian_{args.tag}.json")
 	ogm_txt_path = os.path.join(ogm_dir, f"ogm_{args.tag}.txt")
 	h_npy_path = os.path.join(args.output_dir, f"hamiltonian_{args.tag}.npy")
 	state_npy_path = os.path.join(args.output_dir, f"state_{args.tag}_vector.npy")
 
 	save_pauli_txt(terms, pauli_txt_path, atol=args.simplify_atol)
+	save_pauli_json(terms, pauli_json_path, atol=args.simplify_atol)
 	save_ogm_txt(terms, ogm_txt_path, atol=args.simplify_atol)
 
 	if not args.skip_dense_hamiltonian:
@@ -208,6 +222,7 @@ def main() -> None:
 	print(f"Pauli terms: {len(terms)}")
 	print(f"Ground-state energy (with current Hamiltonian): {e0:.12f}")
 	print(f"Saved Pauli txt: {pauli_txt_path}")
+	print(f"Saved Pauli json: {pauli_json_path}")
 	print(f"Saved OGM txt: {ogm_txt_path}")
 	if not args.skip_dense_hamiltonian:
 		print(f"Saved Hamiltonian npy: {h_npy_path}")

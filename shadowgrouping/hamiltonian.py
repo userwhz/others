@@ -481,6 +481,67 @@ def load_pauli_list6(folder_hamiltonian, molecule_name, basis_name, encoding, ve
 
     return observables, w, offset, E_numerics, state
 
+def load_pauli_fermionic(folder_hamiltonian, molecule_name, basis_name, encoding, verbose=False, sparse=False,
+                     diagonalize=True):
+    basis_matcher = {"sto3g": "STO3g", "6-31g": "6-31G"}
+    basis_name = "sto3g"
+    basis_name = basis_matcher[basis_name]
+
+    len_name = len(molecule_name) + len(basis_name) + 1  # for underscore char in naming scheme
+
+    available_folders = os.listdir(folder_hamiltonian)
+    # txt文件
+    folder_name = "fermionic/hamil_class"
+    base_name = "hamiltonian_fermionic_n7_L3_terms400"
+    file_name = f"{base_name}_pauli.txt"
+
+    # extract Pauli list from file
+    full_file_name = os.path.join(folder_hamiltonian, folder_name, file_name)
+    data = np.loadtxt(full_file_name, dtype=object)
+    paulis, weights = data[::2].astype(str), data[1::2].astype(complex).real
+    print("len(weights)", len(weights))
+
+    # Pauli item "III...II" in list should correspond to energy offset
+    ind = -1
+    identity = "I" * len(paulis[0])
+    for i, p in enumerate(paulis):
+        if p == identity:
+            ind = i
+            break
+    if ind == -1:
+        offset = 0
+        obs = paulis
+        print("a")
+        w = weights
+    else:
+        print("b")
+        offset = weights[ind]
+        # erase the corresponding entry in paulis and weights
+        obs = np.delete(paulis, ind)
+        w = np.delete(weights, ind)
+        assert len(obs) == len(paulis) - 1, "Error in line eraser."
+        assert len(obs) == len(w), "Both arrays are not of equal length anymore."
+
+    # print some to console
+    if verbose:
+        print("Offset", "\t\t", offset)
+        for i, (p, we) in enumerate(zip(obs, w)):
+            print(p, "\t", we)
+            if i == 9:
+                print("\t", "...")
+                break
+
+    # convert string characters to integers
+    observables = np.array([[char_to_int[c] for c in o] for o in obs], dtype=int)
+    state = np.load(os.path.join(folder_hamiltonian, folder_name, "state_fermionic_random_vector_n7.npy"))
+    # state = np.load(f"AlgeState/PauliAlgebraDensityState1.npy")
+
+    # state = np.load("422_density_matrix_part.npy")
+    init_obs = np.load(os.path.join(folder_hamiltonian, folder_name, f"{base_name}.npy"))
+    # init_obs = np.load("422_stabilizer_density_matrix_part.npy")
+    E_numerics = np.vdot(state, init_obs @ state)
+
+    return observables, w, offset, E_numerics, state
 
 
 def load_pauli_list1(folder_hamiltonian, molecule_name, basis_name, encoding, verbose=False, sparse=False,

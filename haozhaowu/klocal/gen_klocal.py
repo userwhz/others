@@ -114,12 +114,10 @@ def main():
 
 	print(f"  -> 已生成哈密顿量 (项数: {len(H_dict)})，并导出 OGM")
 
-	# 2) 生成一个随机量子态文件
+	# 2) 生成一个随机量子态向量
 	psi = generate_random_state_vector(n, rng)
-	rho = np.outer(psi, np.conjugate(psi))
 	np.save(os.path.join(save_dir, f"state_klocal_random_vector_n{n}.npy"), psi)
-	np.save(os.path.join(save_dir, f"state_klocal_random_rho_n{n}.npy"), rho)
-	print("  -> 已生成随机量子态向量与密度矩阵")
+	print("  -> 已生成随机量子态向量")
 
 	print("全部完成！")
 
