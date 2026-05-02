@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
-from qiskit.quantum_info import SparsePauliOp
+from qiskit.quantum_info import SparsePauliOp, Statevector
 
 from .energy_estimator import Energy_estimator, StateSampler
 from .hamiltonian import char_to_int
@@ -11,12 +11,14 @@ from .measurement_schemes import Shadow_Grouping
 from .weight_functions import Bernstein_bound
 
 
-def _exact_ground_energy(ham: dict[str, float]) -> tuple[float, np.ndarray]:
+def _random_state_energy(ham: dict[str, float], nqubit: int) -> tuple[float, np.ndarray]:
+    """Generate a Haar-random state and compute its exact energy expectation."""
+    dim = 2 ** nqubit
+    psi = np.random.randn(dim) + 1j * np.random.randn(dim)
+    psi /= np.linalg.norm(psi)
     op = SparsePauliOp.from_list([(p[::-1], c) for p, c in ham.items()])
-    mat = op.to_matrix()
-    evalues, evectors = np.linalg.eigh(mat)
-    idx = int(np.argmin(evalues))
-    return float(evalues[idx]), evectors[:, idx]
+    E_exact = float(Statevector(psi).expectation_value(op).real)
+    return E_exact, psi
 
 
 def rmse(
@@ -49,7 +51,8 @@ def rmse(
         [[char_to_int[c] for c in p] for p in pauli_strings], dtype=int
     )
 
-    E_exact, state = _exact_ground_energy(ham)
+    nqubit = len(pauli_strings[0])
+    E_exact, state = _random_state_energy(ham, nqubit)
 
     wf = Bernstein_bound(alpha=1)
     scheme = Shadow_Grouping(

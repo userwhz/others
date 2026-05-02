@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
-from qiskit.quantum_info import SparsePauliOp
+from qiskit.quantum_info import SparsePauliOp, Statevector
 
 from shadowgrouping.hamiltonian import random_hamiltonian, char_to_int
 from shadowgrouping.measurement_schemes import Shadow_Grouping
@@ -67,19 +67,18 @@ def run_single(nqubit: int, kterm: int, nshots: int, epsilon: float, seed: int) 
     weights = np.array(list(ham.values()))
     obs = np.array([[char_to_int[c] for c in p] for p in pstrings], dtype=int)
 
-    # Exact ground truth via SparsePauliOp
+    # Random state + exact expectation value (no diagonalization needed)
+    dim = 2 ** nqubit
+    psi = np.random.randn(dim) + 1j * np.random.randn(dim)
+    psi /= np.linalg.norm(psi)
     op = SparsePauliOp.from_list([(p[::-1], c) for p, c in ham.items()])
-    mat = op.to_matrix()
-    evalues, evectors = np.linalg.eigh(mat)
-    idx = int(np.argmin(evalues))
-    E_exact = float(evalues[idx])
-    state = evectors[:, idx]
+    E_exact = float(Statevector(psi).expectation_value(op).real)
     t_setup = time.perf_counter() - t0
 
     # ShadowGrouping
     wf = Bernstein_bound(alpha=1)
     scheme = Shadow_Grouping(obs, weights, epsilon=epsilon, weight_function=wf())
-    sampler = StateSampler(state)
+    sampler = StateSampler(psi)
     estimator = Energy_estimator(scheme, sampler, offset=0)
 
     t1 = time.perf_counter()
@@ -107,11 +106,11 @@ def run_single(nqubit: int, kterm: int, nshots: int, epsilon: float, seed: int) 
 
 
 def main() -> None:
-    nqubit = 10
-    kterm = 50
+    nqubit = 14
+    kterm = 100
     epsilon = 0.1
-    n_seeds = 10
-    shot_budgets: list[int] = [1000, 2000, 5000, 10000, 20000]
+    n_seeds = 1
+    shot_budgets: list[int] = [10, 50, 100]
 
     results_dir = Path(__file__).parent / "results"
     results_dir.mkdir(exist_ok=True)
