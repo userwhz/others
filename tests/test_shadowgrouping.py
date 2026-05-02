@@ -12,7 +12,7 @@ def test_shadowgrouping_random() -> None:
     kterm = 20
     nshots = 3000
     epsilon = 0.1
-    tolerance = 0.8  # max observed over 100 seeds: 0.62
+    tolerance = 1.2  # 1000-seed stats: max=1.00, p99.9=0.91
 
     np.random.seed(42)
 
