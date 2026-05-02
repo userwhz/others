@@ -42,7 +42,6 @@ def test_shadowgrouping_fc_random() -> None:
     scheme = Shadow_Grouping(
         observables, weights, epsilon=epsilon,
         weight_function=wf(), commutation_mode="fc",
-        max_support_qubits=None,
     )
     sampler = StateSampler(state)
     estimator = Energy_estimator(scheme, sampler, offset=0)
@@ -80,7 +79,6 @@ def test_shadowgrouping_fc_consistency() -> None:
         scheme = Shadow_Grouping(
             observables, weights, epsilon=epsilon,
             weight_function=wf(), commutation_mode="fc",
-            max_support_qubits=None,
         )
         sampler = StateSampler(state)
         estimator = Energy_estimator(scheme, sampler, offset=0)

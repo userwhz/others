@@ -60,7 +60,6 @@ def rmse(
         epsilon=epsilon,
         weight_function=wf(),
         commutation_mode=commutation_mode,
-        max_support_qubits=None,
     )
     sampler = StateSampler(state)
     estimator = Energy_estimator(scheme, sampler, offset=0)

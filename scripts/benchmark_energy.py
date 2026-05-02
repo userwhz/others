@@ -48,6 +48,8 @@ def run_benchmark(
     shots: int,
     epsilon: float = 0.1,
     seed: int | None = None,
+    prefix: str | None = None,
+    commutation_mode: str = "qwc",
 ) -> int:
     """Run the benchmark for a single shots value. Returns exit code."""
     if seed is not None:
@@ -64,7 +66,10 @@ def run_benchmark(
     E_exact = compute_exact_energy(ham, psi)
 
     wf = Bernstein_bound(alpha=1)
-    scheme = Shadow_Grouping(obs, weights, epsilon=epsilon, weight_function=wf())
+    scheme = Shadow_Grouping(
+        obs, weights, epsilon=epsilon, weight_function=wf(),
+        commutation_mode=commutation_mode,
+    )
     sampler = StateSampler(psi)
     estimator = Energy_estimator(scheme, sampler, offset=0)
 
@@ -79,13 +84,17 @@ def run_benchmark(
     rmse_val = float(np.sqrt(np.mean((epoch_energies_arr - E_exact) ** 2)))
 
     OUTPUT_DIR.mkdir(exist_ok=True)
-    log_path = OUTPUT_DIR / f"benchmark_{nqubit}q_{shots}shots.log"
+    name_parts = []
+    if prefix:
+        name_parts.append(prefix)
+    name_parts.append(f"benchmark_{nqubit}q_{shots}shots_{commutation_mode}")
+    log_path = OUTPUT_DIR / f"{'_'.join(name_parts)}.log"
 
     lines = []
     lines.append(
         f"state={state_file} hamiltonian={ham_file} "
         f"nqubit={nqubit} repeat={repeat} shots={shots} "
-        f"E_exact={E_exact:.10f}"
+        f"mode={commutation_mode} E_exact={E_exact:.10f}"
     )
     for i, e in enumerate(epoch_energies):
         lines.append(f"epoch {i + 1}: {e:.10f}")
@@ -109,13 +118,17 @@ def main() -> None:
                         help="Shots per epoch (can specify multiple values)")
     parser.add_argument("--epsilon", type=float, default=0.1, help="ShadowGrouping epsilon (default: 0.1)")
     parser.add_argument("--seed", type=int, default=None, help="Random seed")
+    parser.add_argument("--prefix", type=str, default=None,
+                        help="Prefix for log filename (e.g. beh)")
+    parser.add_argument("--mode", type=str, default="qwc", choices=["qwc", "fc"],
+                        help="Commutation mode (default: qwc)")
     args = parser.parse_args()
 
     processes = []
     for shots_val in args.shots:
         p = multiprocessing.Process(
             target=run_benchmark,
-            args=(args.state, args.hamiltonian, args.repeat, shots_val, args.epsilon, args.seed),
+            args=(args.state, args.hamiltonian, args.repeat, shots_val, args.epsilon, args.seed, args.prefix, args.mode),
         )
         p.start()
         processes.append(p)

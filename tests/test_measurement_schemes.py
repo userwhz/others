@@ -2,8 +2,7 @@ import numpy as np
 import pytest
 from shadowgrouping.measurement_schemes import (
     hit_by, pauli_commute, hit_by_mode, N_delta,
-    Measurement_scheme, Shadow_Grouping, pauli_row_to_matrix, build_fc_group_plans,
-    _find_diagonalizing_basis,
+    Measurement_scheme, Shadow_Grouping,
 )
 from shadowgrouping.weight_functions import Bernstein_bound
 
@@ -52,136 +51,23 @@ class TestPauliCommute:
         assert pauli_commute([0, 0, 0], [1, 2, 3])
 
     def test_single_anticommute_does_not_commute(self) -> None:
-        # X and Z on same qubit anticommute
         assert not pauli_commute([1, 0], [3, 0])
 
     def test_two_anticommuting_qubits_commute(self) -> None:
-        # Two anticommuting pairs → even → globally commute
         assert pauli_commute([1, 1, 0], [3, 3, 0])
 
     def test_three_anticommuting_qubits_do_not_commute(self) -> None:
-        # Three anticommuting pairs → odd → globally do not commute
         assert not pauli_commute([1, 1, 1], [3, 3, 3])
 
     @pytest.mark.parametrize("a,b,expected", [
         ([0, 0], [0, 0], True),
-        ([1, 2], [2, 1], True),   # both anticommute → even
-        ([1, 0], [3, 0], False),  # single anticommute → odd
-        ([1, 2], [3, 2], False),  # X-Z anticommutes, Y-Y commutes → odd
-        ([1, 1], [2, 3], True),   # X-Y=ant, X-Z=ant → 2 → even
+        ([1, 2], [2, 1], True),
+        ([1, 0], [3, 0], False),
+        ([1, 2], [3, 2], False),
+        ([1, 1], [2, 3], True),
     ])
     def test_parametrized(self, a: list[int], b: list[int], expected: bool) -> None:
         assert pauli_commute(a, b) == expected
-
-
-class TestPauliRowToMatrix:
-    def test_I_is_identity(self) -> None:
-        mat = pauli_row_to_matrix([0, 0])
-        assert mat.shape == (4, 4)
-        assert np.allclose(mat, np.eye(4))
-
-    def test_single_X_traceless_hermitian(self) -> None:
-        mat = pauli_row_to_matrix([1])
-        assert mat.shape == (2, 2)
-        assert np.allclose(mat, mat.conj().T)
-        assert np.isclose(np.trace(mat), 0)
-
-    def test_single_Z_diagonal(self) -> None:
-        mat = pauli_row_to_matrix([3])
-        expected = np.diag([1, -1])
-        assert np.allclose(mat, expected)
-
-    def test_YY_kron(self) -> None:
-        # Y ⊗ Y
-        y = np.array([[0, -1j], [1j, 0]], dtype=complex)
-        expected = np.kron(y, y)
-        mat = pauli_row_to_matrix([2, 2])
-        assert mat.shape == (4, 4)
-        assert np.allclose(mat, expected)
-
-
-class TestFindDiagonalizingBasis:
-    def test_identity_alone(self) -> None:
-        mat = np.array([[1, 0], [0, 1]], dtype=complex)
-        basis = _find_diagonalizing_basis([mat])
-        assert np.allclose(basis, np.eye(2))
-
-    def test_single_Z_diagonal_in_self(self) -> None:
-        z = np.array([[1, 0], [0, -1]], dtype=complex)
-        basis = _find_diagonalizing_basis([z])
-        d = basis.conj().T @ z @ basis
-        off = d - np.diag(np.diag(d))
-        assert np.max(np.abs(off)) < 1e-7
-
-
-class TestBuildFcGroupPlans:
-    def test_empty_list(self) -> None:
-        obs = np.empty((0, 4), dtype=int)
-        plans = build_fc_group_plans(obs, [])
-        assert plans == {}
-
-    def test_single_observable(self) -> None:
-        obs = np.array([[1, 0, 0, 0]], dtype=int)
-        groups = [np.array([0])]
-        plans = build_fc_group_plans(obs, groups)
-        assert 0 in plans
-        plan = plans[0]
-        assert len(plan["obs_indices"]) == 1
-        assert len(plan["qubits"]) == 1  # only qubit 0
-        assert plan["eigenvalues"].shape == (1, 2)
-
-    def test_empty_qubits_group(self) -> None:
-        obs = np.array([[0, 0, 0]], dtype=int)
-        groups = [np.array([0])]
-        plans = build_fc_group_plans(obs, groups)
-        assert len(plans[0]["qubits"]) == 0
-        assert np.array_equal(plans[0]["eigenvalues"], np.ones((1, 1), dtype=int))
-
-
-class TestShadowGroupingFC:
-    @pytest.fixture
-    def wf(self):
-        return Bernstein_bound(alpha=1)()
-
-    @pytest.fixture
-    def fc_scheme(self, wf) -> Shadow_Grouping:
-        obs = np.array([
-            [1, 0, 0],
-            [0, 1, 0],
-            [0, 0, 1],
-            [1, 1, 1],
-        ])
-        w = np.array([1.0, 1.0, 1.0, 1.0])
-        return Shadow_Grouping(obs, w, epsilon=0.1, weight_function=wf, commutation_mode="fc")
-
-    def test_init_builds_groups(self, fc_scheme: Shadow_Grouping) -> None:
-        assert fc_scheme.groups_fc is not None
-        assert len(fc_scheme.groups_fc) > 0
-        assert fc_scheme.group_plans is not None
-
-    def test_get_group_plan(self, fc_scheme: Shadow_Grouping) -> None:
-        plan = fc_scheme.get_group_plan(0)
-        assert plan is not None
-        assert "unitary" in plan
-        assert "eigenvalues" in plan
-
-    def test_find_setting_returns_group_id(self, fc_scheme: Shadow_Grouping) -> None:
-        _, info = fc_scheme.find_setting()
-        assert "group_id" in info
-        assert "group_size" in info
-        assert info["group_size"] > 0
-
-    def test_find_setting_hits_all_group_members(self, fc_scheme: Shadow_Grouping) -> None:
-        _, info = fc_scheme.find_setting()
-        gid = info["group_id"]
-        group = fc_scheme.groups_fc[gid]
-        assert np.all(fc_scheme.N_hits[group] == 1)
-
-    def test_commutation_mode_validation(self) -> None:
-        obs = np.array([[1, 0], [0, 1]])
-        w = np.array([1.0, 1.0])
-        with pytest.raises(ValueError, match="commutation_mode"):
-            Shadow_Grouping(obs, w, epsilon=0.1, weight_function=None, commutation_mode="xyz")
 
 
 class TestNDelta:
@@ -292,3 +178,50 @@ class TestShadowGrouping:
         w = np.array([1.0, 1.0])
         scheme = Shadow_Grouping(obs, w, epsilon=0.1, weight_function=None)
         assert scheme.weight_function is None
+
+
+class TestShadowGroupingFC:
+    @pytest.fixture
+    def wf(self):
+        return Bernstein_bound(alpha=1)()
+
+    @pytest.fixture
+    def fc_scheme(self, wf) -> Shadow_Grouping:
+        obs = np.array([
+            [1, 0, 0],
+            [0, 1, 0],
+            [0, 0, 1],
+            [1, 1, 1],
+        ])
+        w = np.array([1.0, 1.0, 1.0, 1.0])
+        return Shadow_Grouping(obs, w, epsilon=0.1, weight_function=wf, commutation_mode="fc")
+
+    def test_init_sets_commutation_mode(self, fc_scheme: Shadow_Grouping) -> None:
+        assert fc_scheme.commutation_mode == "fc"
+
+    def test_find_setting_returns_pauli_string(self, fc_scheme: Shadow_Grouping) -> None:
+        setting, info = fc_scheme.find_setting()
+        assert len(setting) == fc_scheme.num_qubits
+        assert all(x in (0, 1, 2, 3) for x in setting)
+        assert "total_weight" in info
+
+    def test_find_setting_hits_some_observables(self, fc_scheme: Shadow_Grouping) -> None:
+        scheme = fc_scheme
+        assert np.all(scheme.N_hits == 0)
+        scheme.find_setting()
+        assert np.sum(scheme.N_hits) > 0
+
+    def test_fc_hits_via_commutation(self, fc_scheme: Shadow_Grouping) -> None:
+        """FC setting should hit observables that commute globally but not QWC."""
+        setting, _ = fc_scheme.find_setting()
+        for i, o in enumerate(fc_scheme.obs):
+            if fc_scheme.N_hits[i] > 0:
+                assert pauli_commute(o, setting), (
+                    f"Observable {o} was hit but does not commute with setting {setting}"
+                )
+
+    def test_commutation_mode_validation(self) -> None:
+        obs = np.array([[1, 0], [0, 1]])
+        w = np.array([1.0, 1.0])
+        with pytest.raises(ValueError, match="commutation_mode"):
+            Shadow_Grouping(obs, w, epsilon=0.1, weight_function=None, commutation_mode="xyz")
