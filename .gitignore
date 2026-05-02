@@ -26,20 +26,6 @@ env/
 .coverage
 htmlcov/
 
-# Editor swap files
-*.swp
-*.swo
-
-# OS
-.DS_Store
-
-# Generated / data files
-*.npy
-*.mat
-
-generated_data/
-*_output.txt
-measurement_settings.txt
 bak/
 .claude/
 benchmark/results/
