@@ -29,3 +29,6 @@ htmlcov/
 bak/
 .claude/
 benchmark/results/
+
+# AI
+CLAUDE.md

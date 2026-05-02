@@ -107,10 +107,10 @@ def run_single(nqubit: int, kterm: int, nshots: int, epsilon: float, seed: int) 
 
 def main() -> None:
     nqubit = 14
-    kterm = 100
+    kterm = 1000
     epsilon = 0.1
     n_seeds = 1
-    shot_budgets: list[int] = [10, 50, 100]
+    shot_budgets: list[int] = [10]
 
     results_dir = Path(__file__).parent / "results"
     results_dir.mkdir(exist_ok=True)
