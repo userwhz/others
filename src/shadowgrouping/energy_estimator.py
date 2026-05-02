@@ -55,6 +55,18 @@ class StateSampler:
         mask = np.array([s != "I" for s in meas_basis], dtype=int)[np.newaxis, :]
         return -2 * bits * mask + 1
 
+    def sample_with_transform(
+        self, qubits: np.ndarray, unitary: np.ndarray, nshots: int = 1
+    ) -> np.ndarray:
+        """Draw samples after applying a basis-change unitary on selected qubits.
+
+        Returns raw computational-basis bits in {0,1}.
+        """
+        circuit = QuantumCircuit(self.num_qubits)
+        if qubits is not None and len(qubits) > 0:
+            circuit.unitary(unitary, list(map(int, qubits)))
+        return self._evolve_and_sample(circuit, nshots)
+
     def index_to_string(self, index_list: np.ndarray | list[int]) -> str:
         pauli_string = ""
         for ind in np.array(index_list, dtype=int):
@@ -75,22 +87,34 @@ class Energy_estimator:
         self.offset: float = offset
         self.settings_dict: dict[str, int] = {}
         self.settings_buffer: dict[str, int] = {}
+        self.group_dict: dict[int, int] = {}
+        self.group_buffer: dict[int, int] = {}
         self.running_avgs: np.ndarray = np.zeros_like(self.measurement_scheme.w)
         self.running_N: np.ndarray = np.zeros(len(self.running_avgs), dtype=int)
         self.num_settings: int = 0
         self.num_outcomes: int = 0
         self.measurement_scheme.reset()
 
+    def _uses_group_circuit_mode(self) -> bool:
+        return (
+            hasattr(self.measurement_scheme, "get_group_plan")
+            and getattr(self.measurement_scheme, "commutation_mode", "qwc") == "fc"
+            and getattr(self.measurement_scheme, "group_plans", None) is not None
+        )
+
     def reset(self) -> None:
         self.running_avgs = np.zeros_like(self.measurement_scheme.w)
         self.running_N = np.zeros(len(self.running_avgs), dtype=int)
         self.settings_dict = {}
         self.settings_buffer = {}
+        self.group_dict = {}
+        self.group_buffer = {}
         self.num_settings, self.num_outcomes = 0, 0
         self.measurement_scheme.reset()
 
     def clear_outcomes(self) -> None:
         self.settings_buffer = self.settings_dict.copy()
+        self.group_buffer = self.group_dict.copy()
         self.running_avgs = np.zeros_like(self.measurement_scheme.w)
         self.running_N = np.zeros(len(self.running_avgs), dtype=int)
         self.num_outcomes = 0
@@ -111,17 +135,55 @@ class Energy_estimator:
 
     def propose_next_settings(self, num_steps: int = 1) -> None:
         settings = []
+        group_ids = []
         for _ in range(num_steps):
-            p, _ = self.measurement_scheme.find_setting()
+            p, info = self.measurement_scheme.find_setting()
             settings.append(p)
+            if self._uses_group_circuit_mode():
+                group_ids.append(int(info["group_id"]))
         settings = np.array(settings)
         self.num_settings += num_steps
         self._settings_to_dict(settings)
+        if self._uses_group_circuit_mode() and len(group_ids) > 0:
+            unique_gid, counts = np.unique(np.array(group_ids, dtype=int), return_counts=True)
+            for gid, reps in zip(unique_gid, counts):
+                for diction in (self.group_dict, self.group_buffer):
+                    val = diction.get(int(gid), 0)
+                    diction[int(gid)] = val + int(reps)
 
     def measure(self) -> None:
         num_meas = self.num_settings - self.num_outcomes
         if num_meas == 0:
             print("No new settings to measure. Call propose_next_settings() first.")
+            return
+
+        if self._uses_group_circuit_mode():
+            for gid, reps in self.group_buffer.items():
+                plan = self.measurement_scheme.get_group_plan(gid)
+                assert plan is not None
+                samples = self.state.sample_with_transform(
+                    plan["qubits"], plan["unitary"], nshots=reps
+                )
+                q = plan["qubits"]
+                if len(q) == 0:
+                    basis_index = np.zeros(reps, dtype=int)
+                else:
+                    bits = samples[:, q].astype(int)
+                    powers = (1 << np.arange(len(q) - 1, -1, -1)).astype(int)
+                    basis_index = np.sum(bits * powers[np.newaxis, :], axis=1)
+
+                eigvals = plan["eigenvalues"]
+                for local_i, obs_idx in enumerate(plan["obs_indices"]):
+                    vals = eigvals[local_i, basis_index]
+                    obs_idx = int(obs_idx)
+                    self.running_avgs[obs_idx] = (
+                        self.running_avgs[obs_idx] * self.running_N[obs_idx] + np.sum(vals)
+                    ) / (self.running_N[obs_idx] + reps)
+                    self.running_N[obs_idx] += reps
+
+            self.num_outcomes = self.num_settings
+            self.group_buffer = {}
+            self.settings_buffer = {}
             return
 
         for setting, reps in self.settings_buffer.items():
