@@ -12,13 +12,6 @@ def hit_by(O: list[int] | np.ndarray, P: list[int] | np.ndarray) -> bool:
     return True
 
 
-def qwc_compatible(O0: list[int] | np.ndarray, O1: list[int] | np.ndarray) -> bool:
-    for a, b in zip(O0, O1):
-        if not (a == 0 or b == 0 or a == b):
-            return False
-    return True
-
-
 def pauli_commute(O0: list[int] | np.ndarray, O1: list[int] | np.ndarray) -> bool:
     """True if two Pauli strings commute globally (anticommuting qubits count is even)."""
     anti_count = 0
@@ -37,13 +30,6 @@ def hit_by_mode(
     if commutation_mode == "fc":
         return pauli_commute(O, P)
     raise ValueError("Unknown commutation_mode '{}'. Use 'qwc' or 'fc'.".format(commutation_mode))
-
-
-def setting_to_str(arr: np.ndarray | list[int]) -> str:
-    out = ""
-    for a in np.array(arr).flatten():
-        out += str(a)
-    return out
 
 
 def N_delta(delta: float) -> float:
@@ -156,9 +142,7 @@ class Measurement_scheme:
         self.num_qubits: int = n
         self.w: np.ndarray = weights
         self.eps: float = epsilon
-        self.scheme_params: dict[str, float | int] = {"eps": epsilon, "num_obs": M}
         self.N_hits: np.ndarray = np.zeros(M, dtype=int)
-        self.is_adaptive: bool = False
         self.commutation_mode: str = "qwc"
 
     def is_hit(self, observable: np.ndarray | list[int], setting: np.ndarray | list[int]) -> bool:
@@ -250,7 +234,6 @@ class Shadow_Grouping(Measurement_scheme):
             assert len(test) == len(self.w), (
                 "Weight function returned array of shape {} instead of {}.".format(test.shape, self.w.shape)
             )
-        self.is_sampling: bool = False
 
     def _build_fc_groups(self) -> list[np.ndarray]:
         n = self.num_obs

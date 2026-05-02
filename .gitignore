@@ -42,3 +42,4 @@ generated_data/
 measurement_settings.txt
 bak/
 .claude/
+benchmark/results/

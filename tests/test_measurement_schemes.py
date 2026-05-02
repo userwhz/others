@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 from shadowgrouping.measurement_schemes import (
-    hit_by, qwc_compatible, pauli_commute, hit_by_mode, setting_to_str, N_delta,
+    hit_by, pauli_commute, hit_by_mode, N_delta,
     Measurement_scheme, Shadow_Grouping, pauli_row_to_matrix, build_fc_group_plans,
     _find_diagonalizing_basis,
 )
@@ -30,16 +30,6 @@ class TestHitBy:
     ])
     def test_parametrized(self, O: list[int], P: list[int], expected: bool) -> None:
         assert hit_by(O, P) == expected
-
-
-class TestQwcCompatible:
-    def test_same_as_hit_by(self) -> None:
-        import random
-        rng = random.Random(42)
-        for _ in range(100):
-            o = [rng.randint(0, 3) for _ in range(4)]
-            p = [rng.randint(0, 3) for _ in range(4)]
-            assert qwc_compatible(o, p) == hit_by(o, p)
 
 
 class TestHitByMode:
@@ -192,17 +182,6 @@ class TestShadowGroupingFC:
         w = np.array([1.0, 1.0])
         with pytest.raises(ValueError, match="commutation_mode"):
             Shadow_Grouping(obs, w, epsilon=0.1, weight_function=None, commutation_mode="xyz")
-
-
-class TestSettingToStr:
-    def test_single_element(self) -> None:
-        assert setting_to_str(np.array([1])) == "1"
-
-    def test_multiple(self) -> None:
-        assert setting_to_str(np.array([1, 0, 3, 2])) == "1032"
-
-    def test_2d_array_flattened(self) -> None:
-        assert setting_to_str(np.array([[1, 2], [3, 0]])) == "1230"
 
 
 class TestNDelta:

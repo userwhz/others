@@ -119,16 +119,10 @@ class Energy_estimator:
         self.running_N = np.zeros(len(self.running_avgs), dtype=int)
         self.num_outcomes = 0
 
-    def _setting_to_str(self, p: np.ndarray) -> str:
-        out = ""
-        for c in p:
-            out += int_to_char[c]
-        return out
-
     def _settings_to_dict(self, settings: np.ndarray) -> None:
         unique_settings, counts = np.unique(settings, axis=0, return_counts=True)
         for setting, nshots in zip(unique_settings, counts):
-            paulistring = self._setting_to_str(setting)
+            paulistring = self.state.index_to_string(setting)
             for diction in (self.settings_dict, self.settings_buffer):
                 val = diction.get(paulistring, 0)
                 diction[paulistring] = nshots + val
@@ -202,6 +196,60 @@ class Energy_estimator:
 
         self.num_outcomes = self.num_settings
         self.settings_buffer = {}
+
+    def measure_batch(self, m: int) -> np.ndarray:
+        """Sample m*reps once and return m independent energy estimates.
+
+        Does NOT modify internal running_avgs state.
+        """
+        num_obs = len(self.measurement_scheme.w)
+        batch_sums = np.zeros((m, num_obs), dtype=float)
+        batch_N = np.zeros(num_obs, dtype=int)
+
+        if self._uses_group_circuit_mode():
+            for gid, reps in self.group_buffer.items():
+                plan = self.measurement_scheme.get_group_plan(gid)
+                assert plan is not None
+                samples = self.state.sample_with_transform(
+                    plan["qubits"], plan["unitary"], nshots=m * reps
+                )
+                q = plan["qubits"]
+                if len(q) == 0:
+                    basis_index = np.zeros(m * reps, dtype=int)
+                else:
+                    bits = samples[:, q].astype(int)
+                    powers = (1 << np.arange(len(q) - 1, -1, -1)).astype(int)
+                    basis_index = np.sum(bits * powers[np.newaxis, :], axis=1)
+
+                eigvals = plan["eigenvalues"]
+                for local_i, obs_idx in enumerate(plan["obs_indices"]):
+                    vals = eigvals[local_i, basis_index].reshape(m, reps)
+                    obs_idx = int(obs_idx)
+                    batch_sums[:, obs_idx] += vals.sum(axis=1)
+                    batch_N[obs_idx] += reps
+
+            self.group_buffer = {}
+            self.settings_buffer = {}
+        else:
+            for setting, reps in self.settings_buffer.items():
+                samples = self.state.sample(meas_basis=setting, nshots=m * reps)
+                for i, o in enumerate(self.measurement_scheme.obs):
+                    if not self.measurement_scheme.is_hit(o, [char_to_int[c] for c in setting]):
+                        continue
+                    masked = samples.copy()
+                    masked[:, o == 0] = 1
+                    products = np.prod(masked, axis=1).reshape(m, reps)
+                    batch_sums[:, i] += products.sum(axis=1)
+                    batch_N[i] += reps
+
+            self.settings_buffer = {}
+
+        batch_avgs = np.zeros_like(batch_sums)
+        np.divide(batch_sums, batch_N, where=batch_N > 0, out=batch_avgs)
+        return np.array([
+            float(np.sum(self.measurement_scheme.w * batch_avgs[j]) + self.offset)
+            for j in range(m)
+        ])
 
     def get_energy(self) -> float:
         energy = np.sum(self.measurement_scheme.w * self.running_avgs)
