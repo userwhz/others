@@ -1,9 +1,9 @@
 import numpy as np
 
-int_to_char = {0: "I", 1: "X", 2: "Y", 3: "Z"}
+int_to_char: dict[int, str] = {0: "I", 1: "X", 2: "Y", 3: "Z"}
 
 
-def random_hamiltonian(nqubit, kterm):
+def random_hamiltonian(nqubit: int, kterm: int) -> dict[str, float]:
     """Generate a random Pauli Hamiltonian.
 
     Args:
@@ -20,9 +20,9 @@ def random_hamiltonian(nqubit, kterm):
             f"({max_terms}) for {nqubit} qubits."
         )
 
-    seen = set()
+    seen: set[str] = set()
     coeffs = np.random.randn(kterm)
-    paulis = []
+    paulis: list[str] = []
 
     while len(paulis) < kterm:
         indices = np.random.randint(0, 4, size=nqubit)
