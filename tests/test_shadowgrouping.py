@@ -12,6 +12,7 @@ def test_shadowgrouping_random() -> None:
     kterm = 20
     nshots = 3000
     epsilon = 0.1
+    tolerance = 0.8  # max observed over 100 seeds: 0.62
 
     np.random.seed(42)
 
@@ -36,7 +37,7 @@ def test_shadowgrouping_random() -> None:
     estimated_energy = estimator.get_energy()
 
     error = abs(estimated_energy - E_GS)
-    assert error < 2.0, (
-        f"Energy estimate error {error:.4f} exceeds tolerance 2.0.\n"
+    assert error < tolerance, (
+        f"Energy estimate error {error:.4f} exceeds tolerance {tolerance}.\n"
         f"Exact: {E_GS:.6f}, Estimated: {estimated_energy:.6f}"
     )
