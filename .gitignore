@@ -65,5 +65,4 @@ venv.bak/
 *.npy
 *.mat
 data/
-generated_data/
 *_output.txt
